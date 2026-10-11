@@ -1,0 +1,115 @@
+PracticeMode pour STAR WARS: Galactic Racer — v{VERSION}
+=========================================================
+
+Un mode entraînement, hors ligne, pour s'entraîner sur n'importe quel circuit :
+  - n'importe quel circuit, véhicule, pilote, nombre de tours ;
+  - build pièce par pièce (stats, capacités, capacité de crash, affixes) ;
+  - crashs illimités ;
+  - restart instantané (F6) ;
+  - save states : 3 emplacements (F7 / F8), position, vitesse ET boost ;
+  - temps enregistrés dans un fichier (date, circuit, véhicule, pilote, temps) ;
+  - chrono de section après chaque retour à un save state ;
+  - fenêtre en français ou en anglais (bouton FR / EN).
+
+
+IMPORTANT — HORS LIGNE UNIQUEMENT
+---------------------------------
+PracticeMode ne fonctionne qu'en solo, hors ligne, et ne touche jamais au multijoueur.
+Le jeu garde les temps faits hors ligne pour les envoyer plus tard aux classements :
+PracticeMode empêche donc qu'un temps fait avec le mod parte en ligne.
+  - Pendant l'entraînement, le pare-feu de Windows bloque toute connexion du jeu.
+  - À la fin, ta sauvegarde est remise EXACTEMENT comme avant l'entraînement
+    (les temps moddés disparaissent avec), et le jeu redevient 100 % d'origine.
+  - Le mod est verrouillé : sans cette protection, il ne fait rien.
+Ne joue jamais en multi pendant une session d'entraînement.
+
+
+CE QU'IL FAUT
+-------------
+  - Windows 10 ou 11, pare-feu Windows activé.
+  - STAR WARS: Galactic Racer sur Steam, version 1.1.4.1 (build Steam 25801363).
+    Après une mise à jour du jeu, PracticeMode refuse de démarrer jusqu'à sa
+    propre mise à jour (sinon le jeu pourrait planter).
+  - Microsoft Visual C++ 2015-2022 : déjà installé avec le jeu ; s'il manque,
+    PracticeMode propose l'installateur fourni avec le jeu.
+  - Rien d'autre : UE4SS est inclus, la fenêtre est un .exe autonome.
+
+
+INSTALLATION
+------------
+1. Extrais le dossier « PracticeMode » où tu veux, SAUF dans « Program Files »
+   et SAUF dans le dossier du jeu. Exemple : C:\PracticeMode
+2. C'est tout : PracticeMode installe et retire lui-même ce qu'il faut dans le jeu.
+
+
+UTILISATION
+-----------
+1. Steam → menu Steam → « Passer en mode hors ligne… ».
+2. Bibliothèque → clic droit sur le jeu → Propriétés → Général → décoche « Steam Cloud ».
+   (Sinon Steam pourrait envoyer ta sauvegarde d'entraînement dans le cloud.)
+3. Lance PracticeMode.exe.
+   Windows peut afficher « Windows a protégé votre ordinateur » (programme non signé) :
+   « Informations complémentaires » → « Exécuter quand même ».
+4. Clique sur « ▶ Démarrer l'entraînement » et accepte la fenêtre administrateur
+   de Windows (c'est le blocage du pare-feu). Le jeu se lance tout seul.
+5. Va au menu principal du jeu : la fenêtre se remplit (circuits, pilotes, build…).
+6. Choisis le véhicule, la planète, le circuit, le pilote et ton build,
+   puis « ▶ Lancer la course » (ou double-clic sur le circuit).
+7. Quand tu fermes le jeu, tout est remis d'origine automatiquement
+   (bandeau vert « prêt pour le multi »). Repasse ensuite Steam EN LIGNE.
+
+
+TOUCHES EN JEU
+--------------
+  F6                  recommencer la course
+  F5                  relancer le dernier choix (depuis le menu principal)
+  F7 / F8             sauver / revenir — emplacement 1
+  Maj+F7 / Maj+F8     emplacement 2
+  Ctrl+F7 / Ctrl+F8   emplacement 3
+  Manette : croix bas = sauver, croix droite = revenir (emplacement 1)
+Une course où tu es revenu à un save state est notée « (save state) » et ne
+compte pas pour tes records.
+
+
+MES TEMPS
+---------
+Dans le dossier « temps » de PracticeMode : temps.txt (lisible), temps.csv
+(tableur), sections.txt (chronos de section). Ils restent après la session.
+L'onglet « Mes temps » de la fenêtre les affiche, avec ★ sur tes records.
+
+
+EN CAS DE PROBLÈME
+------------------
+  - Le jeu a planté ou la fenêtre a été fermée : rouvre PracticeMode.exe et
+    clique sur « ■ Terminer et remettre le jeu d'origine ».
+  - Le pare-feu bloque encore le jeu : bouton « Lever le blocage pare-feu ».
+  - Journal d'UE4SS de chaque session : sessions\<date>\retire-du-jeu\ue4ss\UE4SS.log
+  - Les noms des circuits, pilotes et affixes sont dans la langue réglée DANS le jeu.
+
+
+CE QUE FAIT POUR DE VRAI LE BOUTON « DÉMARRER » (transparence)
+--------------------------------------------------------------
+  1. Vérifie : jeu fermé, Steam hors ligne, Steam Cloud coupé, version du jeu connue.
+  2. Copie (et vérifie) tes données de jeu dans sessions\<date>\avant :
+     %LOCALAPPDATA%\StarWarsGalacticRacer\Saved\SaveGames, Saved\Config,
+     Saved\Crashes et .sentry-native.
+  3. Copie UE4SS + le mod dans Griffin\Binaries\Win64 (dwmapi.dll et le dossier ue4ss).
+  4. Ajoute des règles au pare-feu de Windows (groupe « PracticeMode ») qui bloquent
+     le jeu, son lanceur et ses rapports de plantage (outils\pare-feu-session.ps1).
+  5. Lance le jeu par Steam.
+À la fin : retire UE4SS (gardé dans la session), remet tes données d'avant,
+puis retire les règles du pare-feu. Rien n'est supprimé sans copie vérifiée.
+
+
+DÉSINSTALLATION
+---------------
+Après une session terminée (bandeau vert), supprime simplement le dossier PracticeMode.
+
+
+CRÉDITS
+-------
+  - UE4SS (RE-UE4SS), licence MIT : https://github.com/UE4SS-RE/RE-UE4SS
+    (voir licences\UE4SS-LICENSE.txt). PracticeMode inclut des correctifs
+    (UE4SS_Signatures) pour ce jeu.
+  - PracticeMode : RNGKZK.
+Projet de fan, non officiel, sans lien avec Lucasfilm, Disney ou les éditeurs du jeu.

@@ -1,0 +1,2 @@
+; Mods UE4SS actifs (1) ou inactifs (0)
+PracticeMode : 1

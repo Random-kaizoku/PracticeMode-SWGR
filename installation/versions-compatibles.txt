@@ -1,0 +1,4 @@
+# Versions du jeu pour lesquelles les correctifs d'UE4SS (UE4SS_Signatures) ont été faits.
+# Une ligne par version : empreinte SHA1 de Griffin\Binaries\Win64\SWGR-Win64-Shipping.exe, puis une note.
+# Le launcher refuse de démarrer sur un exe dont l'empreinte n'est pas ici (jeu mis à jour).
+46d606d833d06544f169d2f4b19bc3947df1a49f  jeu 1.1.4.1, Steam build 25801363, exe 490 551 832 octets (10/10/2026)

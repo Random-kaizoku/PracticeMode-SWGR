@@ -1,0 +1,8 @@
+# GÃ©nÃ©rÃ© ou personnel : jamais dans le dÃ©pÃ´t
+construction/
+echange/
+temps/
+sessions/
+fenetre/PracticeMode.ini
+__pycache__/
+*.pyc

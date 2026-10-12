@@ -1,4 +1,6 @@
 # Versions du jeu pour lesquelles les correctifs d'UE4SS (UE4SS_Signatures) ont été faits.
 # Une ligne par version : empreinte SHA1 de Griffin\Binaries\Win64\SWGR-Win64-Shipping.exe, puis une note.
 # Le launcher refuse de démarrer sur un exe dont l'empreinte n'est pas ici (jeu mis à jour).
-46d606d833d06544f169d2f4b19bc3947df1a49f  jeu 1.1.4.1, Steam build 25801363, exe 490 551 832 octets (10/10/2026)
+# Une seule ligne : les signatures ne valent que pour CET exe (ancien exe du 10/10/2026,
+# build 25801363, 46d606d833d06544f169d2f4b19bc3947df1a49f : plus valable depuis le 12/10/2026).
+13364c705ec2de75cde80e62a2cd893289322269  Steam build 25880680, exe « Auto-382801 », 498 240 024 octets (12/10/2026)

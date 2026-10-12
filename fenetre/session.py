@@ -34,11 +34,10 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from langues import t   # textes en français / anglais
+    from langues import m      # textes en français / anglais (m : message traduisible)
 except ImportError:         # module chargé par son chemin (tests) : on ajoute son dossier
-    import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from langues import t
+    from langues import m
 
 # Ce qui est sauvegardé puis restauré (relatif au dossier de données du jeu)
 ELEMENTS_PROTEGES = ["Saved/SaveGames", "Saved/Config", "Saved/Crashes", ".sentry-native"]
@@ -54,6 +53,8 @@ DLL_VISUAL_CPP = ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll",
                   "msvcp140_atomic_wait.dll", "msvcp140_codecvt_ids.dll"]
 # Ligne du mod qui reçoit, à l'installation, le dossier de PracticeMode
 LIGNE_DOSSIER_MOD = re.compile(r'^local DOSSIER_PRACTICEMODE = "[^"\r\n]*"', re.M)
+# … et celle qui reçoit le fichier de Steam lu par le verrou du mod (Steam hors ligne ?)
+LIGNE_STEAM_MOD = re.compile(r'^local FICHIER_STEAM = "[^"\r\n]*"', re.M)
 
 
 class ErreurSession(Exception):
@@ -192,7 +193,7 @@ def arreter_crashpad(cfg, journal):
             if h:
                 _k32.TerminateProcess(h, 0)
                 _k32.CloseHandle(h)
-                journal(t("crashpad_arrete", pid=pid))
+                journal(m("crashpad_arrete", pid=pid))
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -257,7 +258,7 @@ def _empreinte(chemin):
 def copie_verifiee(source, destination):
     source, destination = Path(source), Path(destination)
     if destination.exists():
-        raise ErreurSession(t("destination_existe", chemin=destination))
+        raise ErreurSession(m("destination_existe", chemin=destination))
     destination.parent.mkdir(parents=True, exist_ok=True)
     if source.is_dir():
         shutil.copytree(source, destination)
@@ -268,7 +269,7 @@ def copie_verifiee(source, destination):
     for f in fichiers:
         copie = destination / f.relative_to(source) if source.is_dir() else destination
         if not copie.exists() or _empreinte(f) != _empreinte(copie):
-            raise ErreurSession(t("copie_differente", chemin=copie))
+            raise ErreurSession(m("copie_differente", chemin=copie))
 
 
 def _supprimer(chemin):
@@ -298,7 +299,7 @@ def verifier_version_jeu(cfg):
     faire planter. On refuse donc une version inconnue."""
     empreinte = _empreinte(cfg.win64 / EXE_JEU).lower()
     if empreinte not in versions_compatibles(cfg):
-        raise ErreurSession(t("version_inconnue", empreinte=empreinte[:12]))
+        raise ErreurSession(m("version_inconnue", empreinte=empreinte[:12]))
 
 
 def visual_cpp_manquant():
@@ -330,38 +331,41 @@ def chemin_pour_lua(chemin):
         if _k32.GetShortPathNameW(texte, tampon, 1024) and tampon.value.isascii():
             texte = tampon.value
         else:
-            raise ErreurSession(t("chemin_accents", chemin=chemin))
+            raise ErreurSession(m("chemin_accents", chemin=chemin))
     return texte.replace("\\", "/").rstrip("/") + "/"
 
 
 def installer_chemin_dans_mod(cfg):
-    """Écrit le dossier de PracticeMode dans le main.lua INSTALLÉ dans le jeu
-    (celui du dossier « installation » n'est pas modifié)."""
+    """Écrit dans le main.lua INSTALLÉ dans le jeu (celui du dossier
+    « installation » n'est pas modifié) : le dossier de PracticeMode, et le
+    fichier de Steam que le verrou du mod relit (Steam hors ligne ?)."""
     fichier = cfg.win64 / "ue4ss" / "Mods" / "PracticeMode" / "Scripts" / "main.lua"
     texte = fichier.read_bytes().decode("utf-8")
-    ligne = f'local DOSSIER_PRACTICEMODE = "{chemin_pour_lua(cfg.projet)}"'
-    nouveau, n = LIGNE_DOSSIER_MOD.subn(lambda m: ligne, texte)
-    if n != 1:
-        raise ErreurSession(t("installation_echec"))
-    fichier.write_bytes(nouveau.encode("utf-8"))
+    dossier = f'local DOSSIER_PRACTICEMODE = "{chemin_pour_lua(cfg.projet)}"'
+    steam = f'local FICHIER_STEAM = "{chemin_pour_lua(cfg.steam / "config" / "loginusers.vdf").rstrip("/")}"'
+    texte, n1 = LIGNE_DOSSIER_MOD.subn(lambda m: dossier, texte)
+    texte, n2 = LIGNE_STEAM_MOD.subn(lambda m: steam, texte)
+    if (n1, n2) != (1, 1):
+        raise ErreurSession(m("installation_echec"))
+    fichier.write_bytes(texte.encode("utf-8"))
 
 
 def verifier_avant_debut(cfg, exiger_steam=True):
     """Lève ErreurSession avec un message clair si on ne peut pas commencer."""
     if session_en_cours(cfg):
-        raise ErreurSession(t("deja_ouverte"))
+        raise ErreurSession(m("deja_ouverte"))
     if not jeu_trouve(cfg):
-        raise ErreurSession(t("jeu_introuvable"))
+        raise ErreurSession(m("jeu_introuvable"))
     if jeu_lance(cfg):
-        raise ErreurSession(t("jeu_tourne"))
+        raise ErreurSession(m("jeu_tourne"))
     if ue4ss_installe(cfg):
-        raise ErreurSession(t("ue4ss_sans_session"))
+        raise ErreurSession(m("ue4ss_sans_session"))
     if exiger_steam and not steam_hors_ligne(cfg):
-        raise ErreurSession(t("steam_en_ligne"))
+        raise ErreurSession(m("steam_en_ligne"))
     if exiger_steam and not cloud_desactive(cfg):
-        raise ErreurSession(t("steam_cloud"))
+        raise ErreurSession(m("steam_cloud"))
     if not (cfg.installation / "dwmapi.dll").exists():
-        raise ErreurSession(t("ue4ss_introuvable", chemin=cfg.installation))
+        raise ErreurSession(m("ue4ss_introuvable", chemin=cfg.installation))
     verifier_version_jeu(cfg)
     chemin_pour_lua(cfg.projet)
 
@@ -378,7 +382,7 @@ def debut(cfg, journal, exiger_steam=True):
         source = cfg.donnees_jeu / element
         if source.exists():
             copie_verifiee(source, avant / element)
-            journal(t("sauvegarde_verifiee", element=element))
+            journal(m("sauvegarde_verifiee", element=element))
     (session / "win64-origine.txt").write_text(
         "\n".join(sorted(p.name for p in cfg.win64.iterdir())) + "\n", encoding="utf-8")
     # Le marqueur est écrit AVANT l'installation : si quelque chose plante
@@ -387,9 +391,9 @@ def debut(cfg, journal, exiger_steam=True):
     shutil.copy2(cfg.installation / "dwmapi.dll", cfg.win64 / "dwmapi.dll")
     shutil.copytree(cfg.installation / "ue4ss", cfg.win64 / "ue4ss")
     if not ue4ss_installe(cfg):
-        raise ErreurSession(t("installation_echec"))
+        raise ErreurSession(m("installation_echec"))
     installer_chemin_dans_mod(cfg)
-    journal(t("installe"))
+    journal(m("installe"))
     return session
 
 
@@ -398,16 +402,16 @@ def fin(cfg, journal):
     session = session_en_cours(cfg)
     if not session:
         if ue4ss_installe(cfg):
-            raise ErreurSession(t("ue4ss_sans_marqueur"))
-        journal(t("aucune_session"))
+            raise ErreurSession(m("ue4ss_sans_marqueur"))
+        journal(m("aucune_session"))
         return None
     if jeu_lance(cfg):
-        raise ErreurSession(t("jeu_tourne_encore"))
+        raise ErreurSession(m("jeu_tourne_encore"))
     if not jeu_trouve(cfg):
-        raise ErreurSession(t("jeu_introuvable"))
+        raise ErreurSession(m("jeu_introuvable"))
     avant, apres, retire = session / "avant", session / "apres-session", session / "retire-du-jeu"
     if not avant.exists():
-        raise ErreurSession(t("sauvegarde_introuvable", chemin=avant))
+        raise ErreurSession(m("sauvegarde_introuvable", chemin=avant))
 
     arreter_crashpad(cfg, journal)
 
@@ -417,7 +421,7 @@ def fin(cfg, journal):
         if item.name not in origine:
             copie_verifiee(item, retire / item.name)
             _supprimer(item)
-            journal(t("retire_du_jeu", nom=item.name))
+            journal(m("retire_du_jeu", nom=item.name))
 
     # Remettre les données du jeu
     for element in ELEMENTS_PROTEGES:
@@ -427,16 +431,16 @@ def fin(cfg, journal):
             _supprimer(actuel)
         if copie_avant.exists():
             copie_verifiee(copie_avant, actuel)
-            journal(t("restaure", element=element))
+            journal(m("restaure", element=element))
 
     # Vérification finale : le jeu doit être exactement comme avant
     if ue4ss_installe(cfg):
-        raise ErreurSession(t("ue4ss_encore"))
+        raise ErreurSession(m("ue4ss_encore"))
     maintenant = {p.name for p in cfg.win64.iterdir()}
     if maintenant != origine:
-        raise ErreurSession(t("win64_different", diff=sorted(maintenant ^ origine)))
+        raise ErreurSession(m("win64_different", diff=sorted(maintenant ^ origine)))
     os.replace(cfg.marqueur, session / "session-terminee.txt")
-    journal(t("jeu_origine"))
+    journal(m("jeu_origine"))
     return session
 
 
@@ -513,17 +517,17 @@ def liberer_pare_feu(cfg, journal, lanceur=lancer_script_pare_feu):
     if etat_pare_feu(cfg) == "actif":
         cfg.signal_pare_feu.write_text("liberer", encoding="utf-8")
         if attendre_etat_pare_feu(cfg, "retire", 15) == "retire":
-            journal(t("pf_leve"))
+            journal(m("pf_leve"))
             return True
     if regles_pare_feu_presentes(cfg) is False:
-        journal(t("pf_aucun"))
+        journal(m("pf_aucun"))
         return True
-    journal(t("pf_encore"))
+    journal(m("pf_encore"))
     if not lanceur(cfg, "Retirer"):
-        journal(t("pf_refuse"))
+        journal(m("pf_refuse"))
         return False
     ok = attendre_etat_pare_feu(cfg, "retire", 60) == "retire"
-    journal(t("pf_leve") if ok else t("pf_non_verifie"))
+    journal(m("pf_leve") if ok else m("pf_non_verifie"))
     return ok
 
 

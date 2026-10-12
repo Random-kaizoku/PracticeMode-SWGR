@@ -9,7 +9,23 @@ Un mode entraînement, hors ligne, pour s'entraîner sur n'importe quel circuit 
   - save states : 3 emplacements (F7 / F8), position, vitesse ET boost ;
   - temps enregistrés dans un fichier (date, circuit, véhicule, pilote, temps) ;
   - chrono de section après chaque retour à un save state ;
-  - fenêtre en français ou en anglais (bouton FR / EN).
+  - fenêtre en français ou en anglais (bouton FR / EN) ;
+  - adversaires IA (jusqu'à 11 ; les modules contre des modules), avec les
+    difficultés du mode histoire (Recrue, Pilote, As, Antagoniste) ;
+  - le build, les capacités et les buffs propres à chaque pilote, en un clic
+    (onglet Build) ;
+  - modules (en cours d'amélioration) : lance depuis le MENU PRINCIPAL du jeu
+    pour courir dans le pod de ton pilote ; depuis une course, c'est le pod de
+    l'épreuve contre-la-montre, et les capacités de certains pilotes de module
+    sont incomplètes. Corrections prévues en 2.1.
+
+
+NOUVEAUTÉS DE LA 2.0.0
+----------------------
+  - Compatible avec la mise à jour du jeu du 12 octobre 2026 (build Steam 25880680).
+  - Adversaires IA et difficulté des IA ; styles des pilotes (build + buffs) ;
+    nouvelle interface sombre. Modules : encore en amélioration (voir plus haut).
+  - Plus stable (le mod tourne dans le fil principal du jeu) et courses plus fluides.
 
 
 IMPORTANT — HORS LIGNE UNIQUEMENT
@@ -27,7 +43,8 @@ Ne joue jamais en multi pendant une session d'entraînement.
 CE QU'IL FAUT
 -------------
   - Windows 10 ou 11, pare-feu Windows activé.
-  - STAR WARS: Galactic Racer sur Steam, version 1.1.4.1 (build Steam 25801363).
+  - STAR WARS: Galactic Racer sur Steam, version actuelle (build Steam 25880680,
+    mise à jour du jeu du 12 octobre 2026).
     Après une mise à jour du jeu, PracticeMode refuse de démarrer jusqu'à sa
     propre mise à jour (sinon le jeu pourrait planter).
   - Microsoft Visual C++ 2015-2022 : déjà installé avec le jeu ; s'il manque,

@@ -12,6 +12,10 @@ texte avec le mod UE4SS « PracticeMode », dans le dossier « echange » :
 
 Les textes de la fenêtre sont dans langues.py (français et anglais).
 
+Classement en ligne (v0.9.8, classement.py) : c'est la fenêtre, et jamais le
+jeu, qui publie un temps quand on clique sur « Publier ce temps », sur un
+serveur à part (Cloudflare), totalement séparé des classements officiels.
+
 Utilisation : double-clic sur Fenetre-PracticeMode.bat (ou sur ce fichier).
 Le jeu doit tourner avec la session ouverte (Debut-Session.bat).
 """
@@ -30,14 +34,16 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+import classement as C   # classement en ligne : pseudo, envoi, lecture (fichier classement.py)
 import langues as L   # textes en français / anglais (fichier langues.py)
 import session as S   # le « launcher » : sauvegarde, UE4SS, pare-feu (fichier session.py)
+import theme as T     # couleurs, polices et éléments dessinés de la fenêtre (fichier theme.py)
 from langues import t
 
 # ─────────────────────────────────────────────────────────────────────────
 #  RÉGLAGES
 # ─────────────────────────────────────────────────────────────────────────
-VERSION = "0.9.4"   # même numéro que le mod (main.lua) ; vérifié par outils/empaqueter.py
+VERSION = "2.0.0"   # même numéro que le mod (main.lua) ; vérifié par outils/empaqueter.py
 
 DOSSIER_PROJET = S.dossier_application()   # dossier de PracticeMode.exe, ou du dépôt
 DOSSIER_ECHANGE = DOSSIER_PROJET / "echange"
@@ -48,6 +54,32 @@ FICHIER_LANGUE = DOSSIER_ECHANGE / "langue.txt"   # lu par le mod : langue de se
 FICHIER_PREFERENCES = (DOSSIER_PROJET if getattr(sys, "frozen", False)
                        else Path(__file__).resolve().parent) / "PracticeMode.ini"
 FICHIER_TEMPS_CSV = DOSSIER_PROJET / "temps" / "temps.csv"   # écrit par le mod à chaque arrivée
+FICHIER_STYLES = DOSSIER_ECHANGE / "styles.json"   # écrit par le mod : styles des pilotes (build, buffs)
+FICHIER_DIFFICULTES = DOSSIER_ECHANGE / "difficultes.json"   # écrit par le mod : difficultés du mode histoire
+FICHIER_PUBLIES = DOSSIER_PROJET / "temps" / "classement-publies.json"   # temps publiés en ligne (v0.9.8)
+LIGNES_CLASSEMENT = 100   # temps lus pour un classement en ligne (les premiers, plus le sien)
+# Classement en ligne visible ? Non dans la version publique 2.0.0 : son
+# serveur n'est pas encore en ligne. L'onglet est construit mais pas affiché,
+# le bouton « Publier ce temps » et la colonne « En ligne » sont cachés : la
+# fenêtre ne peut alors rien envoyer ni lire sur Internet. True pour le rallumer.
+CLASSEMENT_ACTIF = False
+# Difficulté des IA (v0.9.7) : les 4 niveaux du mode histoire, du plus facile au plus dur
+NIVEAUX_DIFFICULTE = ("cadet", "pilote", "as", "champion")
+# Réglages du jeu que le mod change pour chaque niveau, et leur texte (« avance des IA +2 s »)
+REGLAGES_IA = [("AiMaxTimeAheadModifier", "reg_avance_max"), ("AiMaxTimeAheadMultiplier", "reg_avance_max"),
+               ("AiMinTimeAheadModifier", "reg_avance_min"),
+               ("AiAggressionVPlayerChanceMultiplier", "reg_agressivite"),
+               ("AiAggressionVPlayerCooldownMultiplier", "reg_delai"), ("AiAbilityChanceMultiplier", "reg_capacites")]
+# Difficultés du jeu → niveau, quand difficultes.json n'en donne pas (mod
+# v0.9.7 : Recrue et Antagoniste n'y étaient pas reconnues)
+NIVEAU_PAR_NOM = (("easy", "cadet"), ("nightmare", "champion"), ("normal", "pilote"), ("hard", "as"))
+
+# Style d'un pilote : lequel prendre selon le véhicule. Clés de styles.json :
+# modes multijoueur du jeu (EMPGameMode : 2 tournoi solo, 3 tournoi de modules,
+# 5 action instantanée, 6 action instantanée en module), puis le style de campagne.
+# Le style « action instantanée » impose le build du pilote (ses vraies stats).
+ORDRE_STYLES = {"avion": ("6", "3", "campagne"), "autre": ("5", "2", "campagne")}
+NB_ADVERSAIRES_MAX = 11   # comme CONFIG.AdversairesMax dans le mod
 
 # Nos 4 types de véhicule : nom de l'archétype dans le jeu → (clé, tag de secours, n° EVehicleArchetype)
 # La clé doit correspondre à CONFIG.Types dans le mod.
@@ -90,7 +122,6 @@ def aucune():
     return t("aucune")
 
 
-COULEURS_RARETE = {0: "#6b6b6b", 1: "#2e7d32", 2: "#1565c0", 3: "#7b1fa2", 4: "#c62828", 5: "#ef6c00"}
 
 # Catégories d'affixes : on prend le mot qui suit « AFX_ » dans le nom interne
 # (AFX_Ramjet_… → Ramjet). Certains mots sont des variantes du même thème.
@@ -187,15 +218,15 @@ def segments_texte(texte, perc=None, ints=None):
 
 
 def texte_simple(texte, perc=None, ints=None):
-    return "".join(t for t, _ in segments_texte(texte, perc, ints))
+    return "".join(morceau for morceau, _ in segments_texte(texte, perc, ints))
 
 
 def noms_des_mots_cles(textes):
     """Le jeu associe une icône à un mot : <widget id="Ramjet"/><H1>statoréacteur</>.
     On en déduit le nom français de chaque mot-clé (le plus fréquent)."""
     votes = {}
-    for t in textes:
-        for cle, mot in re.findall(r'<widget id="(\w+)"/>\s*<H1>([^<]+)</>', t or ""):
+    for txt in textes:   # (pas « t » : c'est la fonction de traduction)
+        for cle, mot in re.findall(r'<widget id="(\w+)"/>\s*<H1>([^<]+)</>', txt or ""):
             votes.setdefault(cle, Counter())[mot.strip()] += 1
     return {cle: c.most_common(1)[0][0] for cle, c in votes.items()}
 
@@ -231,33 +262,72 @@ def code_langue(texte):
     return (texte or "")[:2].lower()
 
 
-def textes_dans_la_langue(donnees):
-    """Le mod donne chaque texte du jeu deux fois : dans la langue du jeu
-    (« affiche ») et dans sa langue d'origine (« affiche_src », en général
-    l'anglais). Si la fenêtre est dans la langue d'origine mais pas le jeu
-    (fenêtre EN, jeu FR), on prend la version d'origine ; sinon celle du jeu.
-    Ex. : affiche « Lantaana », affiche_src « Lantaana » ; affiche « Pilote
-    automatique », affiche_src « Autopilot »."""
-    ui = donnees.get("interface") or {}
-    jeu, source = code_langue(ui.get("langue_jeu")), code_langue(ui.get("langue_source"))
-    if not source or L.actuelle() != source or jeu == source:
+def fichier_traduction(code):
+    """echange/catalogue-<langue>.json : les noms du jeu dans une autre langue
+    que la sienne, écrits par le mod (il passe le jeu dans cette langue le
+    temps de les lire, au menu principal)."""
+    return DOSSIER_ECHANGE / f"catalogue-{code}.json"
+
+
+def lire_traduction(code):
+    try:
+        with open(fichier_traduction(code), encoding="utf-8") as f:
+            traduction = json.load(f)
+        return traduction if traduction.get("langue") == code else None
+    except (OSError, ValueError):
+        return None
+
+
+def appliquer_traduction(donnees, traduction):
+    """Remplace, objet par objet (repéré par son chemin), les noms et
+    descriptions du catalogue par ceux de la traduction, s'il y en a une pour
+    la langue de la fenêtre et que le jeu est dans une autre langue.
+    Ex. : « Champs de guerre » → « Battlefield »."""
+    if not traduction:
         return donnees
-
-    def remplacer(d):
-        for cle in [k for k in d if k.endswith("_src")]:
-            base, valeur = cle[:-4], d[cle]
-            if isinstance(valeur, dict):
-                d[base] = {**(d.get(base) or {}), **{k: v for k, v in valeur.items() if v}}
-            elif valeur:
-                d[base] = valeur
-
+    objets = traduction.get("objets") or {}
     for section in donnees.values():
         if isinstance(section, list):
             for element in section:
-                if isinstance(element, dict):
-                    remplacer(element)
-    remplacer(ui)
+                if isinstance(element, dict) and element.get("chemin") in objets:
+                    for cle, valeur in objets[element["chemin"]].items():
+                        if valeur:
+                            element[cle] = valeur
+    ui = donnees.setdefault("interface", {})
+    for cle, valeur in (traduction.get("interface") or {}).items():
+        if isinstance(valeur, dict):
+            ui[cle] = {**(ui.get(cle) or {}), **{k: v for k, v in valeur.items() if v}}
+        elif valeur:
+            ui[cle] = valeur
     return donnees
+
+
+def texte_reglages(reglages):
+    """{"AiMaxTimeAheadModifier": 2.0, …} → « avance des IA +2 s, agressivité ×1.5, … »"""
+    def valeur(champ):
+        v = reglages.get(champ)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return f"×{v:g}" if champ.endswith("Multiplier") else f"{v:+g} s"
+        return None
+    # Même écart pour l'avance max. et min. (sans multiplicateur) : une seule mention
+    fusion = (valeur("AiMaxTimeAheadModifier") is not None
+              and valeur("AiMaxTimeAheadModifier") == valeur("AiMinTimeAheadModifier")
+              and valeur("AiMaxTimeAheadMultiplier") is None)
+    morceaux = []
+    for champ, cle in REGLAGES_IA:
+        v = valeur(champ)
+        if v is None or (fusion and champ == "AiMinTimeAheadModifier"):
+            continue
+        morceaux.append(t("reg_avance" if fusion and champ == "AiMaxTimeAheadModifier" else cle, v=v))
+    return ", ".join(morceaux) or t("reg_aucun")
+
+
+def niveau_difficulte(d):
+    """Niveau (cadet, pilote, as, champion) d'une difficulté de difficultes.json."""
+    if d.get("niveau") in NIVEAUX_DIFFICULTE:
+        return d["niveau"]
+    nom = (d.get("nom") or "").lower()
+    return next((niveau for mot, niveau in NIVEAU_PAR_NOM if mot in nom), None)
 
 
 def cle_circuit(nom):
@@ -267,19 +337,43 @@ def cle_circuit(nom):
     return m.group(1) if m else (nom or "")
 
 
+def detail_build(texte):
+    """Colonne « Détail du build » de temps.csv (v0.9.6) → dictionnaire.
+    « niveaux=0,3,…;capacites=<chemin>|<chemin>;adversaires=5;position=2 »"""
+    res = {}
+    for morceau in (texte or "").split(";"):
+        cle, egal, valeur = morceau.partition("=")
+        if egal and cle.strip():
+            res[cle.strip()] = valeur.strip()
+    return res
+
+
 class Catalogue:
     """Le contenu de catalogue.json, rangé pour l'interface."""
 
-    def __init__(self, donnees):
+    def __init__(self, donnees, traduction=None, toutes_traductions=(), styles=None, difficultes=None):
         # Nom de chaque véhicule dans toutes les langues → sa clé (motojet…),
-        # pour reconnaître un même véhicule dans temps.csv quelle que soit la langue
+        # pour reconnaître un même véhicule dans temps.csv quelle que soit la
+        # langue dans laquelle le temps a été noté
         self.cle_par_nom_vehicule = {}
         for v in donnees.get("vehicules", []):
             if v["nom"] in TYPES:
-                for nom in (v.get("affiche"), v.get("affiche_src"), TYPES[v["nom"]][0]):
+                noms = [v.get("affiche"), TYPES[v["nom"]][0]]
+                noms += [((tr.get("objets") or {}).get(v.get("chemin")) or {}).get("affiche")
+                         for tr in toutes_traductions if tr]
+                for nom in noms:
                     if nom:
                         self.cle_par_nom_vehicule[nom] = TYPES[v["nom"]][0]
-        donnees = textes_dans_la_langue(donnees)
+        # Même chose pour les pilotes (nom affiché → nom interne DA_…), pour
+        # publier un temps au classement en ligne quelle que soit la langue
+        self.pilote_par_nom = {}
+        for p in donnees.get("pilotes", []):
+            noms = [p.get("affiche")] + [((tr.get("objets") or {}).get(p.get("chemin")) or {}).get("affiche")
+                                         for tr in toutes_traductions if tr]
+            for nom in noms:
+                if nom:
+                    self.pilote_par_nom.setdefault(nom, p["nom"])
+        donnees = appliquer_traduction(donnees, traduction)
 
         # Véhicules : uniquement nos 4 types connus
         self.vehicules = []   # (clé, nom affiché, tag, n° d'archétype)
@@ -314,7 +408,9 @@ class Catalogue:
             variante = variante_pilote(p["nom"])
             if homonymes[(p["groupe"], p["texte"])] > 1 and variante:
                 p["texte"] += f"  ({variante})"
+            self.pilote_par_nom[p["texte"]] = p["nom"]   # (nom exact, variante comprise)
         self.pilotes.sort(key=lambda p: p["texte"].lower())
+        self.texte_pilote = {p["nom"]: p["texte"] for p in self.pilotes}   # nom interne → nom affiché
 
         # Noms des stats et des raretés fournis par le jeu (VehicleUIConfig)
         self.interface = donnees.get("interface", {}) or {}
@@ -340,6 +436,49 @@ class Catalogue:
                 self.categories[a["categorie"]] = nom[:1].upper() + nom[1:]
         self.par_chemin = {a["chemin"]: a for a in self.affixes}
         self.capacite_par_chemin = {c["chemin"]: c for c in self.capacites + self.crashs}
+
+        # Styles des pilotes (styles.json, v0.9.6) : build et buffs (traits) de
+        # chaque pilote. Absent tant que le mod ne l'a pas écrit (au menu principal).
+        styles = appliquer_traduction(styles, traduction) if styles else {}
+        self.styles_lus = bool(styles)
+        self.style_par_chemin = {s["chemin"]: s for s in styles.get("styles", [])}
+        self.trait_par_chemin = {tr["chemin"]: tr for tr in styles.get("traits", [])}
+        self.styles_par_pilote = {p["chemin"]: p.get("styles") or {} for p in styles.get("pilotes", [])}
+        for s in self.style_par_chemin.values():
+            s["texte"] = s.get("affiche") or s.get("nom", "")
+        for tr in self.trait_par_chemin.values():
+            tr["texte"] = tr.get("affiche") or tr.get("nom", "")
+
+        # Difficultés du mode histoire (difficultes.json, v0.9.7) : noms et
+        # descriptions du jeu, et ce que le mod change pour chaque niveau
+        difficultes = appliquer_traduction(difficultes, traduction) if difficultes else {}
+        self.difficultes = {niveau_difficulte(d): d for d in difficultes.get("difficultes", [])
+                            if niveau_difficulte(d)}
+        self.reglages_difficulte = difficultes.get("reglages_mod") or {}
+
+    # ── styles des pilotes ────────────────────────────────────────────────
+    def style_pour(self, pilote, cle_vehicule):
+        """Le style d'un pilote pour ce véhicule (dictionnaire), ou None.
+        Podracer : styles « module » d'abord ; autres véhicules : « action
+        instantanée » d'abord (celui qui a le build du pilote), puis campagne."""
+        styles = self.styles_par_pilote.get(pilote) or {}
+        if cle_vehicule == "avion":
+            # Module (v2.0.0) : les styles « action instantanée » des pilotes de
+            # pod n'ont ni capacité ni statoréacteur ; celui du tournoi de
+            # modules en a parfois un vrai (Sebulba : le lance-flammes). On le
+            # prend en premier quand il a une capacité.
+            s = self.style_par_chemin.get(styles.get("3"))
+            if s and s.get("capacites"):
+                return s
+        for mode in ORDRE_STYLES["avion" if cle_vehicule == "avion" else "autre"]:
+            s = self.style_par_chemin.get(styles.get(mode))
+            if s and (s.get("build") or s.get("traits") or s.get("capacites")):
+                return s
+        return None
+
+    def nom_trait(self, chemin):
+        tr = self.trait_par_chemin.get(chemin)
+        return tr["texte"] if tr else nom_court(chemin.rsplit(".", 1)[-1])
 
     # ── noms affichés par le jeu ──────────────────────────────────────────
     def nom_stat(self, emplacement, numero_archetype):
@@ -375,14 +514,44 @@ class Catalogue:
         """Nom de véhicule (dans n'importe quelle langue) → clé motojet / voiture…"""
         return self.cle_par_nom_vehicule.get(nom, nom)
 
+    def nom_vehicule(self, cle):
+        """Clé motojet / voiture… → nom affiché par le jeu."""
+        for c, affiche, _tag, _num in self.vehicules:
+            if c == cle:
+                return affiche
+        return cle
+
+    def circuit_par_nom(self, nom):
+        """Circuit (dictionnaire) d'après son nom d'objet (TRAK_…), ou None."""
+        for c in self.circuits:
+            if c["nom"] == nom:
+                return c
+        return None
+
+    def circuit_interne(self, cle):
+        """Circuit noté dans temps.csv (« … [nom interne] ») → nom d'objet TRAK_…
+        (le même pour tout le monde, et qui ne contient que A-Z, 0-9 et _)."""
+        for c in self.circuits:
+            if cle in (c.get("interne"), c["nom"]):
+                return c["nom"]
+        return ""
+
+
+def lire_json(fichier):
+    try:
+        with open(fichier, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
 
 def lire_catalogue():
     """Renvoie un Catalogue, ou None si le fichier n'existe pas encore."""
-    try:
-        with open(FICHIER_CATALOGUE, encoding="utf-8") as f:
-            return Catalogue(json.load(f))
-    except (OSError, ValueError):
+    donnees = lire_json(FICHIER_CATALOGUE)
+    if donnees is None:
         return None
+    return Catalogue(donnees, lire_traduction(L.actuelle()), [lire_traduction(code) for code in L.LANGUES],
+                     lire_json(FICHIER_STYLES), lire_json(FICHIER_DIFFICULTES))
 
 
 def envoyer_commande(lignes):
@@ -394,6 +563,22 @@ def envoyer_commande(lignes):
     os.replace(tmp, FICHIER_COMMANDE)
 
 
+def lire_publies():
+    """Temps déjà publiés au classement en ligne (v0.9.8) : course → place obtenue."""
+    donnees = lire_json(FICHIER_PUBLIES)
+    return donnees if isinstance(donnees, dict) else {}
+
+
+def ecrire_publies(publies):
+    try:
+        FICHIER_PUBLIES.parent.mkdir(parents=True, exist_ok=True)
+        tmp = FICHIER_PUBLIES.with_suffix(".tmp")
+        tmp.write_text(json.dumps(publies, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, FICHIER_PUBLIES)
+    except OSError:
+        pass
+
+
 # ─────────────────────────────────────────────────────────────────────────
 #  INTERFACE
 # ─────────────────────────────────────────────────────────────────────────
@@ -402,24 +587,34 @@ class Fenetre(tk.Tk):
         super().__init__()
         self.prefs = configparser.ConfigParser(interpolation=None)
         self.prefs.read(FICHIER_PREFERENCES, encoding="utf-8")
-        for section in ("choix", "build", "fenetre"):
+        for section in ("choix", "build", "fenetre", "classement"):
             if section not in self.prefs:
                 self.prefs[section] = {}
         self.choix = self.prefs["choix"]
         self.pref_build = self.prefs["build"]
+        self.pref_classement = self.prefs["classement"]
 
         # Langue : celle choisie la dernière fois, sinon celle de Windows
         L.choisir(self.prefs["fenetre"].get("langue") or L.langue_par_defaut())
         self.var_langue = tk.StringVar(value=L.actuelle())
         self.ecrire_langue_pour_le_mod()
         self.title(f"{t('titre')}  —  v{VERSION}")
-        self.geometry("1350x800")
+        self.polices = T.appliquer(self)   # thème sombre, néon (avant de construire quoi que ce soit)
+        T.icone(self)
+        self.geometry(T.taille_initiale(self, 1400, 940))
         self.minsize(1100, 650)
         self.catalogue = None
 
         # Variables de l'onglet Course
         self.var_type = tk.StringVar(value=self.choix.get("type", "motojet"))
         self.var_tours = tk.IntVar(value=int(self.choix.get("tours", "3")))
+        adversaires = self.choix.get("adversaires", "0")
+        self.var_adversaires = tk.IntVar(value=int(adversaires) if adversaires.isdigit() else 0)
+        # Difficulté des IA (v0.9.7) : niveau choisi (« » = celle du jeu, sans changement)
+        difficulte = self.choix.get("difficulte", "")
+        self.difficulte = difficulte if difficulte in NIVEAUX_DIFFICULTE else ""
+        self.var_difficulte = tk.StringVar(value="")
+        self.var_difficulte_texte = tk.StringVar(value="")
         self.var_speciaux = tk.BooleanVar(value=self.choix.getboolean("speciaux", False))
         self.var_dessus = tk.BooleanVar(value=self.choix.getboolean("au_premier_plan", True))
         self.var_etat = tk.StringVar(value="")
@@ -443,25 +638,56 @@ class Fenetre(tk.Tk):
         self.var_nb_affixes = tk.StringVar(value="")
         self.affixes_choisis = [a for a in (self.pref_build.get("affixes", "") or "").split("|") if a]
         self.chemin_par_texte = {aucune(): ""}
+        # Style du pilote (v0.9.6) : chargé à la sélection d'un pilote ; ses
+        # traits (buffs) cochés sont envoyés au jeu avec la course.
+        self.var_build_pilote = tk.BooleanVar(value=self.pref_build.getboolean("build_pilote", True))
+        self.style_choisi = self.pref_build.get("style", "") or ""
+        self.traits_choisis = [x for x in (self.pref_build.get("traits", "") or "").split("|") if x]
+        self.lignes_temps = {}   # ligne du tableau Mes temps → ligne de temps.csv
+
+        # Classement en ligne (v0.9.8) : pseudo « arcade », adresse du serveur,
+        # catégorie affichée. Rien n'est envoyé ni lu sans un clic de l'utilisateur.
+        self.var_pseudo = tk.StringVar(value=C.nettoyer_saisie(self.pref_classement.get("pseudo", "")))
+        self.var_pseudo.trace_add("write", lambda *a: self.pseudo_tape())
+        self.var_adresse = tk.StringVar(value=self.pref_classement.get("adresse", "") or C.URL_PAR_DEFAUT)
+        categorie = self.pref_classement.get("categorie", "")
+        self.var_categorie = tk.StringVar(value=categorie if categorie in C.CATEGORIES else C.CATEGORIES[0])
+        self.var_classement_titre = tk.StringVar(value="")
+        self.var_classement_etat = tk.StringVar(value="")
+        self.publies = lire_publies()          # temps déjà publiés (pour la colonne « En ligne »)
+        self.file_reseau = queue.Queue()       # résultats des appels au serveur (tâches de fond)
+        self.numero_demande = {"tableaux": 0, "classement": 0}   # (seule la dernière réponse compte)
+        self.publication_en_cours = False
+        self.tableau_affiche = None            # classement affiché : circuit, vehicule, tours, categorie
+        self.cache_tableaux = None             # (catégorie, liste) : dernière liste des classements lue
+        self.cache_classement = None           # (tableau, réponse) : dernier classement lu
+        self.entrees_classement = {}           # ligne du tableau → temps lu au classement
+        self.classement_ouvert = False         # onglet déjà ouvert (premier chargement fait) ?
 
         # Session d'entraînement (launcher). Le dossier du jeu est trouvé tout
         # seul par Steam, sauf si l'utilisateur en a choisi un (préférences).
         dossier_jeu = self.prefs["fenetre"].get("dossier_jeu", "")
         self.cfg = S.Config(racine_jeu=dossier_jeu) if S.est_dossier_du_jeu(dossier_jeu or None) else S.Config()
         self.file_messages = queue.Queue()   # messages envoyés par les tâches de fond
+        self.historique_messages = []        # (heure, message) : réaffichés après un changement de langue
         self.travail_en_cours = False        # une tâche de fond tourne-t-elle ?
         self.jeu_vu = False                  # le jeu a-t-il tourné pendant cette session ?
         self.absent_depuis = None            # depuis quand le jeu est-il fermé ?
         self.var_session = tk.StringVar(value="")
         self.etat_session = None             # (clé du texte, couleur) affichés dans le bandeau
         self.etat_boutons = None             # (session ouverte, jeu lancé) au dernier contrôle
+        self.alerte_steam = False            # alerte « Steam en ligne pendant une session » déjà donnée ?
+        self.fermeture_demandee = False      # fermer la fenêtre dès que la fin de session est faite
 
         self._construire()
+        T.barre_titre_sombre(self)
         self.attributes("-topmost", self.var_dessus.get())
+        self._date_traduction = self.date_traduction()   # (le catalogue chargé ici l'inclut déjà)
         self.charger_catalogue()
         self.after(DELAI_ETAT, self.rafraichir_etat)
         self.after(300, self.lire_messages)
         self.after(500, self.surveiller_session)
+        self.after(100, self.lire_reseau)
         self.executer(self.verifier_pare_feu_au_demarrage)
         self.protocol("WM_DELETE_WINDOW", self.fermer)
 
@@ -469,77 +695,86 @@ class Fenetre(tk.Tk):
     #  CONSTRUCTION
     # ═════════════════════════════════════════════════════════════════════
     def _construire(self):
-        # ── Bandeau « Session d'entraînement » ──
-        bandeau = ttk.LabelFrame(self, text=t("bandeau_session"), padding=8)
-        bandeau.pack(fill="x", padx=8, pady=(8, 0))
-        self.etiquette_session = tk.Label(bandeau, textvariable=self.var_session, font=("Segoe UI", 11, "bold"),
-                                          anchor="w")
-        self.etiquette_session.grid(row=0, column=0, sticky="w")
+        P = self.polices
+        # ── Bandeau du haut : titre néon, véhicule et langue en boutons segmentés ──
+        entete = T.Entete(self, P, "PRACTICE MODE", t("entete_sous_titre", version=VERSION))
+        entete.pack(fill="x")
+        ttk.Label(entete.droite, text=t("vehicule").rstrip(" :").upper(),
+                  style="Entete.TLabel").pack(side="left", padx=(0, 8))
+        self.cadre_types = ttk.Frame(entete.droite, style="Entete.TFrame")   # (rempli par charger_catalogue)
+        self.cadre_types.pack(side="left")
+        ttk.Label(entete.droite, text=t("langue").upper(), style="Entete.TLabel").pack(side="left", padx=(28, 8))
+        for code in L.LANGUES:
+            ttk.Radiobutton(entete.droite, text=L.NOMS[code], value=code, variable=self.var_langue, width=4,
+                            style="Segment.Toolbutton", command=self.changer_langue).pack(side="left")
+
+        # ── Session d'entraînement : voyant, état, boutons, messages ──
+        bandeau = ttk.LabelFrame(self, text=t("bandeau_session").upper(), padding=(10, 4, 10, 8))
+        bandeau.pack(fill="x", padx=12, pady=(10, 0))
+        bandeau.columnconfigure(1, weight=1)
+        self.voyant = T.Voyant(bandeau)
+        self.voyant.grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.etiquette_session = tk.Label(bandeau, textvariable=self.var_session, font=P.etat, anchor="w",
+                                          background=T.FOND)
+        self.etiquette_session.grid(row=0, column=1, sticky="w")
         boutons = ttk.Frame(bandeau)
-        boutons.grid(row=0, column=1, sticky="e")
-        bandeau.columnconfigure(0, weight=1)
+        boutons.grid(row=0, column=2, sticky="e")
         self.bouton_demarrer = ttk.Button(boutons, text=t("btn_demarrer"), command=self.demarrer)
-        self.bouton_relancer = ttk.Button(boutons, text=t("btn_relancer"), command=lambda: S.lancer_jeu(self.cfg))
+        self.bouton_relancer = ttk.Button(boutons, text=t("btn_relancer"), command=self.relancer_jeu)
         self.bouton_terminer = ttk.Button(boutons, text=t("btn_terminer"),
                                           command=lambda: self.executer(self.sequence_fin))
         self.bouton_pare_feu = ttk.Button(boutons, text=t("btn_pare_feu"),
                                           command=lambda: self.executer(self.sequence_lever_pare_feu))
         for b in (self.bouton_demarrer, self.bouton_relancer, self.bouton_terminer, self.bouton_pare_feu):
-            b.pack(side="left", padx=4)
-        self.liste_messages = tk.Listbox(bandeau, height=3, font=("Consolas", 9), activestyle="none")
-        self.liste_messages.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-
-        haut = ttk.Frame(self, padding=8)
-        haut.pack(fill="x")
-        ttk.Label(haut, text=t("vehicule"), font=("Segoe UI", 10, "bold")).pack(side="left")
-        self.cadre_types = ttk.Frame(haut)
-        self.cadre_types.pack(side="left", padx=8)
-
-        # Bouton de langue : [FR][EN], le choix actif est enfoncé et en bleu
-        langue = ttk.Frame(haut)
-        langue.pack(side="right")
-        ttk.Label(langue, text=t("langue")).pack(side="left", padx=(0, 6))
-        for code in L.LANGUES:
-            tk.Radiobutton(langue, text=L.NOMS[code], value=code, variable=self.var_langue,
-                           indicatoron=False, width=4, font=("Segoe UI", 9, "bold"),
-                           selectcolor="#bbdefb", cursor="hand2",
-                           command=self.changer_langue).pack(side="left")
+            b.pack(side="left", padx=(8, 0))
+        self.liste_messages = tk.Listbox(bandeau, height=2, font=P.mono_petit, activestyle="none")
+        self.liste_messages.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        if self.etat_session:
+            self.voyant.allumer(self.etat_session[1])
 
         # Le bas de la fenêtre est placé AVANT les onglets (en partant du bas) :
         # s'il manque de la hauteur, ce sont les onglets qui rétrécissent, et le
         # bouton « Lancer la course » reste toujours visible.
-        ttk.Label(self, textvariable=self.var_etat, padding=(8, 2, 8, 6),
-                  font=("Consolas", 10)).pack(side="bottom", fill="x")
-        ttk.Label(self, text=t("aide"), foreground="#555", padding=(8, 0),
+        ttk.Label(self, textvariable=self.var_etat, style="Statut.TLabel",
+                  padding=(14, 5)).pack(side="bottom", fill="x")
+        ttk.Label(self, text=t("aide"), style="Aide.TLabel", padding=(14, 2, 14, 6),
                   wraplength=1300).pack(side="bottom", fill="x")
-        bas = ttk.Frame(self, padding=(8, 6))
+        bas = ttk.Frame(self, padding=(12, 8, 12, 6))
         bas.pack(side="bottom", fill="x")
+        ttk.Separator(self).pack(side="bottom", fill="x", padx=12)
         ttk.Label(bas, text=t("tours")).pack(side="left")
-        ttk.Spinbox(bas, from_=1, to=20, width=4, textvariable=self.var_tours).pack(side="left", padx=(4, 16))
-        ttk.Checkbutton(bas, text=t("speciaux"),
-                        variable=self.var_speciaux, command=self.remplir_planetes).pack(side="left")
+        ttk.Spinbox(bas, from_=1, to=20, width=4, textvariable=self.var_tours).pack(side="left", padx=(6, 18))
+        ttk.Label(bas, text=t("adversaires")).pack(side="left")
+        ttk.Spinbox(bas, from_=0, to=NB_ADVERSAIRES_MAX, width=4,
+                    textvariable=self.var_adversaires).pack(side="left", padx=(6, 4))
+        ttk.Label(bas, text=t("adversaires_aide"), style="Doux.TLabel").pack(side="left", padx=(0, 18))
         ttk.Checkbutton(bas, text=t("premier_plan"), variable=self.var_dessus,
-                        command=lambda: self.attributes("-topmost", self.var_dessus.get())).pack(side="left", padx=16)
-        ttk.Button(bas, text=t("recharger_catalogue"), command=self.demander_catalogue).pack(side="right")
-        ttk.Button(bas, text=t("lancer"), command=self.lancer).pack(side="right", padx=8)
+                        command=lambda: self.attributes("-topmost", self.var_dessus.get())).pack(side="left")
+        ttk.Button(bas, text=t("lancer"), style="Accent.TButton", command=self.lancer).pack(side="right")
+        ttk.Button(bas, text=t("recharger_catalogue"), command=self.demander_catalogue).pack(side="right", padx=10)
 
         onglets = self.onglets = ttk.Notebook(self)
-        onglets.pack(fill="both", expand=True, padx=8)
-        page_course = ttk.Frame(onglets, padding=8)
-        page_build = ttk.Frame(onglets, padding=8)
-        page_temps = ttk.Frame(onglets, padding=8)
-        onglets.add(page_course, text=t("onglet_course"))
-        onglets.add(page_build, text=t("onglet_build"))
-        onglets.add(page_temps, text=t("onglet_temps"))
+        onglets.pack(fill="both", expand=True, padx=12, pady=(8, 6))
+        page_course = ttk.Frame(onglets, padding=10)
+        page_build = ttk.Frame(onglets, padding=10)
+        page_temps = ttk.Frame(onglets, padding=10)
+        page_classement = self.page_classement = ttk.Frame(onglets, padding=10)
+        onglets.add(page_course, text=t("onglet_course").strip().upper())
+        onglets.add(page_build, text=t("onglet_build").strip().upper())
+        onglets.add(page_temps, text=t("onglet_temps").strip().upper())
+        if CLASSEMENT_ACTIF:
+            onglets.add(page_classement, text=t("onglet_classement").strip().upper())
         self._construire_course(page_course)
         self._construire_build(page_build)
         self._construire_temps(page_temps)
+        self._construire_classement(page_classement)
+        onglets.bind("<<NotebookTabChanged>>", lambda e: self.onglet_change())
 
     def _liste(self, parent, ligne, colonne, largeur):
         cadre = ttk.Frame(parent)
         cadre.grid(row=ligne, column=colonne, sticky="nsew", padx=(0, 8))
         liste = tk.Listbox(cadre, width=largeur, exportselection=False, activestyle="none",
-                           font=("Segoe UI", 10))
+                           font=self.polices.texte)
         defil = ttk.Scrollbar(cadre, orient="vertical", command=liste.yview)
         liste.configure(yscrollcommand=defil.set)
         liste.pack(side="left", fill="both", expand=True)
@@ -551,7 +786,11 @@ class Fenetre(tk.Tk):
         page.columnconfigure(2, weight=1)
         page.rowconfigure(1, weight=1)
         for col, titre in enumerate((t("col_planete"), t("col_circuit"), t("col_pilote"))):
-            ttk.Label(page, text=titre, font=("Segoe UI", 10, "bold")).grid(row=0, column=col, sticky="w")
+            ttk.Label(page, text=titre.upper(), style="Titre.TLabel").grid(row=0, column=col, sticky="w",
+                                                                           pady=(0, 6))
+        # (au-dessus de la liste des circuits, qu'elle change)
+        ttk.Checkbutton(page, text=t("speciaux"), variable=self.var_speciaux,
+                        command=self.remplir_planetes).grid(row=0, column=1, sticky="e", padx=(0, 8), pady=(0, 6))
         self.liste_planetes = self._liste(page, 1, 0, 18)
         self.liste_circuits = self._liste(page, 1, 1, 70)
 
@@ -564,12 +803,29 @@ class Fenetre(tk.Tk):
         self.arbre_pilotes.configure(yscrollcommand=defil.set)
         self.arbre_pilotes.pack(side="left", fill="both", expand=True)
         defil.pack(side="right", fill="y")
-        self.arbre_pilotes.tag_configure("groupe", font=("Segoe UI", 10, "bold"))
+        self.arbre_pilotes.tag_configure("groupe", font=self.polices.hud_petit, foreground=T.AMBRE)
         self.arbre_pilotes.bind("<<TreeviewSelect>>", lambda e: self.pilote_choisi())
 
         self.liste_planetes.bind("<<ListboxSelect>>", lambda e: self.remplir_circuits())
         self.liste_circuits.bind("<<ListboxSelect>>", lambda e: self.circuit_choisi())
         self.liste_circuits.bind("<Double-Button-1>", lambda e: self.lancer())
+
+        # Difficulté des IA (v0.9.7) : celle du mode histoire, pour les courses avec adversaires
+        ligne = ttk.Frame(page)
+        ligne.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        ttk.Label(ligne, text=t("difficulte").rstrip(" :").upper(), style="Titre.TLabel").pack(side="left")
+        self.combo_difficulte = ttk.Combobox(ligne, state="readonly", width=24, textvariable=self.var_difficulte)
+        self.combo_difficulte.pack(side="left", padx=(6, 12))
+        self.combo_difficulte.bind("<<ComboboxSelected>>", lambda e: self.difficulte_choisie())
+        description = ttk.Label(ligne, textvariable=self.var_difficulte_texte, style="Doux.TLabel", wraplength=900,
+                                justify="left")
+        description.pack(side="left", fill="x", expand=True)
+        # (le texte revient à la ligne selon la place vraiment disponible)
+        description.bind("<Configure>", lambda e: e.widget.configure(wraplength=max(200, e.width - 4)))
+        if not getattr(self, "_suivi_adversaires", False):   # (une seule fois : les onglets sont reconstruits)
+            self._suivi_adversaires = True
+            self.var_adversaires.trace_add("write", lambda *a: self.decrire_difficulte())
+        self.remplir_difficultes()
 
     def _construire_build(self, page):
         """Onglet Build :
@@ -578,24 +834,42 @@ class Fenetre(tk.Tk):
         page.columnconfigure(2, weight=1)
         page.rowconfigure(0, weight=1)
 
-        # ── Colonne 1 : améliorations de stat ──
-        stats = ttk.LabelFrame(page, text=t("stats_titre"), padding=8)
-        stats.grid(row=0, column=0, sticky="nsw", padx=(0, 8))
+        # ── Colonne 1 : améliorations de stat, puis style du pilote ──
+        gauche = ttk.Frame(page)
+        gauche.grid(row=0, column=0, sticky="nsw", padx=(0, 8))
+        stats = ttk.LabelFrame(gauche, text=t("stats_titre").upper(), padding=(10, 4))
+        stats.pack(fill="x")
         # Nom de la stat à gauche, curseur à droite : une ligne par stat (prend
         # deux fois moins de hauteur que le nom au-dessus du curseur)
         self.etiquettes_stats = []
         for i in range(6):
             etiquette = ttk.Label(stats, text=t("stats_secours")[i], wraplength=140)
-            etiquette.grid(row=i, column=0, sticky="w", padx=(0, 6))
+            etiquette.grid(row=i, column=0, sticky="w", padx=(0, 8), pady=2)
             self.etiquettes_stats.append(etiquette)
-            tk.Scale(stats, from_=0, to=NIVEAU_MAX, orient="horizontal", length=170, showvalue=True,
-                     variable=self.var_niveaux[i], command=lambda *_: self.rafraichir_recap()
-                     ).grid(row=i, column=1, sticky="w")
+            ttk.Scale(stats, from_=0, to=NIVEAU_MAX, orient="horizontal", length=150, variable=self.var_niveaux[i],
+                      command=lambda valeur, var=self.var_niveaux[i]: self.niveau_change(var, valeur)
+                      ).grid(row=i, column=1, sticky="w")
+            ttk.Label(stats, textvariable=self.var_niveaux[i], style="Valeur.TLabel", width=3,
+                      anchor="e").grid(row=i, column=2, sticky="e", padx=(6, 0))
+
+        # Style du pilote choisi : son nom, ses buffs (cochés = envoyés au jeu)
+        cadre_style = ttk.LabelFrame(gauche, text=t("style_titre").upper(), padding=(10, 4))
+        cadre_style.pack(fill="both", expand=True, pady=(10, 0))
+        self.var_style_texte = tk.StringVar(value="")
+        etiquette = ttk.Label(cadre_style, textvariable=self.var_style_texte, font=self.polices.gras,
+                              foreground=T.AMBRE, wraplength=320)
+        etiquette.pack(anchor="w")
+        etiquette.bind("<Enter>", lambda e: self.decrire_style())
+        self.cadre_traits = ttk.Frame(cadre_style)
+        self.cadre_traits.pack(fill="x", pady=(2, 6))
+        ttk.Checkbutton(cadre_style, text=t("style_auto"), variable=self.var_build_pilote).pack(anchor="w")
+        ttk.Button(cadre_style, text=t("style_recharger"),
+                   command=self.charger_build_pilote).pack(anchor="w", pady=(4, 0))
 
         # ── Colonne 2 : capacités et options ──
         milieu = ttk.Frame(page)
         milieu.grid(row=0, column=1, sticky="nsw", padx=(0, 8))
-        caps = ttk.LabelFrame(milieu, text=t("capacites"), padding=8)
+        caps = ttk.LabelFrame(milieu, text=t("capacites").upper(), padding=(10, 4))
         caps.pack(fill="x")
         # Une ligne par emplacement : son nom à gauche, la liste à droite
         self.combos_capacites = []
@@ -611,46 +885,47 @@ class Fenetre(tk.Tk):
         self.combo_crash.grid(row=NB_CAPACITES, column=1, sticky="w", pady=(8, 0))
         self.combo_crash.bind("<<ComboboxSelected>>", lambda e: self.capacite_choisie(self.var_crash))
 
-        opts = ttk.LabelFrame(milieu, text=t("options"), padding=8)
-        opts.pack(fill="x", pady=(8, 0))
+        opts = ttk.LabelFrame(milieu, text=t("options").upper(), padding=(10, 4))
+        opts.pack(fill="x", pady=(10, 0))
         for texte, var in ((t("opt_boost"), self.var_boost), (t("opt_ramjet"), self.var_ramjet),
                            (t("opt_pannes"), self.var_pannes), (t("opt_illimites"), self.var_illimites)):
-            tk.Checkbutton(opts, text=texte, variable=var, anchor="w",
-                           command=self.rafraichir_recap).pack(fill="x")
+            ttk.Checkbutton(opts, text=texte, variable=var, command=self.rafraichir_recap).pack(fill="x")
 
         # ── Colonne 3 : affixes par catégorie, avec cases à cocher ──
-        aff = ttk.LabelFrame(page, text=t("affixes_titre"), padding=8)
+        aff = ttk.LabelFrame(page, text=t("affixes_titre").upper(), padding=(10, 4))
         aff.grid(row=0, column=2, sticky="nsew")
         aff.columnconfigure(0, weight=1)
         aff.rowconfigure(1, weight=1)
         haut = ttk.Frame(aff)
         haut.grid(row=0, column=0, sticky="ew")
-        ttk.Label(haut, text=t("rechercher")).pack(side="left")
-        ttk.Entry(haut, textvariable=self.var_recherche, width=26).pack(side="left", padx=4)
+        haut.columnconfigure(1, weight=1)
+        ttk.Label(haut, text=t("rechercher")).grid(row=0, column=0, sticky="w")
+        ttk.Entry(haut, textvariable=self.var_recherche).grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        # (sur sa propre ligne : son texte est long)
         ttk.Checkbutton(haut, text=t("caches"), variable=self.var_caches,
-                        command=self.remplir_affixes).pack(side="left", padx=8)
+                        command=self.remplir_affixes).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 4))
 
         cadre = ttk.Frame(aff)
         cadre.grid(row=1, column=0, sticky="nsew")
         self.arbre = ttk.Treeview(cadre, columns=("rarete",), show="tree headings", selectmode="none")
         self.arbre.heading("#0", text=t("col_affixe"))
         self.arbre.heading("rarete", text=t("col_rarete"))
-        self.arbre.column("#0", width=380)
-        self.arbre.column("rarete", width=110, anchor="center")
+        self.arbre.column("#0", width=270)
+        self.arbre.column("rarete", width=95, anchor="center", stretch=False)
         defil = ttk.Scrollbar(cadre, orient="vertical", command=self.arbre.yview)
         self.arbre.configure(yscrollcommand=defil.set)
         self.arbre.pack(side="left", fill="both", expand=True)
         defil.pack(side="right", fill="y")
-        self.arbre.tag_configure("choisi", background="#d9f2d0", font=("Segoe UI", 10, "bold"))
-        self.arbre.tag_configure("categorie", font=("Segoe UI", 10, "bold"))
-        for r, couleur in COULEURS_RARETE.items():
+        self.arbre.tag_configure("choisi", background=T.NEON_SOMBRE, font=self.polices.gras)
+        self.arbre.tag_configure("categorie", font=self.polices.hud_petit, foreground=T.AMBRE)
+        for r, couleur in T.RARETES.items():
             self.arbre.tag_configure(f"r{r}", foreground=couleur)
         self.arbre.bind("<Button-1>", self.clic_affixe)
         self.arbre.bind("<Motion>", self.survol_affixe)
 
         bas = ttk.Frame(aff)
         bas.grid(row=2, column=0, sticky="ew", pady=(4, 0))
-        ttk.Label(bas, textvariable=self.var_nb_affixes, font=("Segoe UI", 10, "bold")).pack(side="left")
+        ttk.Label(bas, textvariable=self.var_nb_affixes, style="Titre.TLabel").pack(side="left")
         ttk.Button(bas, text=t("tout_decocher"), command=self.retirer_affixes).pack(side="right")
         # (ici et pas sous les options : la colonne du milieu n'a pas la place, il était coupé)
         ttk.Button(bas, text=t("build_zero"), command=self.build_a_zero).pack(side="right", padx=(0, 8))
@@ -660,21 +935,19 @@ class Fenetre(tk.Tk):
         bas_page.grid(row=1, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
         bas_page.columnconfigure(0, weight=1)
         bas_page.columnconfigure(1, weight=1)
-        desc = ttk.LabelFrame(bas_page, text=t("description_titre"), padding=6)
-        desc.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        self.texte_desc = tk.Text(desc, height=6, wrap="word", font=("Segoe UI", 10), relief="flat",
-                                  background=self.cget("background"))
+        desc = ttk.LabelFrame(bas_page, text=t("description_titre").upper(), padding=6)
+        desc.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        self.texte_desc = tk.Text(desc, height=4, wrap="word", font=self.polices.texte)
         self.texte_desc.pack(fill="both", expand=True)
-        self.texte_desc.tag_configure("titre", font=("Segoe UI", 11, "bold"))
-        self.texte_desc.tag_configure("h1", font=("Segoe UI", 10, "bold"), foreground="#1565c0")
-        self.texte_desc.tag_configure("defaut", foreground="#c62828")
+        self.texte_desc.tag_configure("titre", font=self.polices.titre_texte, foreground=T.TEXTE_TITRE)
+        self.texte_desc.tag_configure("h1", font=self.polices.gras, foreground=T.NEON)
+        self.texte_desc.tag_configure("defaut", foreground=T.ROUGE)
         self.texte_desc.configure(state="disabled")
-        recap = ttk.LabelFrame(bas_page, text=t("recap_titre"), padding=6)
+        recap = ttk.LabelFrame(bas_page, text=t("recap_titre").upper(), padding=6)
         recap.grid(row=0, column=1, sticky="nsew")
-        self.texte_recap = tk.Text(recap, height=6, wrap="word", font=("Segoe UI", 10), relief="flat",
-                                   background=self.cget("background"))
+        self.texte_recap = tk.Text(recap, height=5, wrap="word", font=self.polices.texte)
         self.texte_recap.pack(fill="both", expand=True)
-        self.texte_recap.tag_configure("cle", font=("Segoe UI", 10, "bold"))
+        self.texte_recap.tag_configure("cle", font=self.polices.gras, foreground=T.NEON)
         self.texte_recap.configure(state="disabled")
 
     def _construire_temps(self, page):
@@ -688,14 +961,14 @@ class Fenetre(tk.Tk):
         ttk.Button(haut, text=t("ouvrir_temps"),
                    command=lambda: os.startfile(FICHIER_TEMPS_CSV.parent) if FICHIER_TEMPS_CSV.parent.exists()
                    else None).pack(side="right")
-        ttk.Label(haut, text=t("legende_record"),
-                  foreground="#555").pack(side="right", padx=12)
-        colonnes = ("date", "planete", "circuit", "tours", "vehicule", "pilote", "temps", "meilleur", "detail")
+        ttk.Label(haut, text=t("legende_record"), style="Doux.TLabel").pack(side="right", padx=12)
+        colonnes = ("date", "planete", "circuit", "tours", "vehicule", "pilote", "temps", "place", "meilleur", "detail",
+                    "en_ligne")
         titres = t("colonnes_temps")
-        largeurs = (135, 95, 360, 45, 95, 105, 105, 90, 200)
+        largeurs = (135, 95, 300, 45, 95, 105, 105, 60, 90, 170, 75)
         cadre = ttk.Frame(page)
         cadre.grid(row=1, column=0, sticky="nsew")
-        self.table_temps = ttk.Treeview(cadre, columns=colonnes, show="headings")
+        self.table_temps = ttk.Treeview(cadre, columns=colonnes, show="headings", selectmode="browse")
         for col, titre, larg in zip(colonnes, titres, largeurs):
             self.table_temps.heading(col, text=titre)
             self.table_temps.column(col, width=larg, anchor="w")
@@ -703,24 +976,54 @@ class Fenetre(tk.Tk):
         self.table_temps.configure(yscrollcommand=defil.set)
         self.table_temps.pack(side="left", fill="both", expand=True)
         defil.pack(side="right", fill="y")
-        self.table_temps.tag_configure("record", background="#fff3c4", font=("Segoe UI", 10, "bold"))
+        self.table_temps.tag_configure("record", background=T.RECORD_FOND, foreground=T.AMBRE,
+                                       font=self.polices.gras)
+        if not CLASSEMENT_ACTIF:
+            self.table_temps.configure(displaycolumns=colonnes[:-1])   # (sans « En ligne »)
+        self.table_temps.bind("<<TreeviewSelect>>", lambda e: self.afficher_detail_temps())
         self._date_temps = None
+
+        # Build de la course sélectionnée (clic sur une ligne)
+        detail = ttk.LabelFrame(page, text=t("detail_titre").upper(), padding=6)
+        detail.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        detail.columnconfigure(0, weight=1)
+        self.texte_detail = tk.Text(detail, height=8, wrap="word", font=self.polices.texte)
+        self.texte_detail.grid(row=0, column=0, sticky="ew")
+        self.texte_detail.tag_configure("cle", font=self.polices.gras, foreground=T.NEON)
+        self.texte_detail.tag_configure("note", foreground=T.TEXTE_DOUX)
+        self.texte_detail.tag_configure("en_ligne", font=self.polices.gras, foreground=T.AMBRE)
+        boutons = ttk.Frame(detail)
+        boutons.grid(row=0, column=1, sticky="ne", padx=(8, 0))
+        self.bouton_reprendre = ttk.Button(boutons, text=t("detail_reprendre"), state="disabled",
+                                           command=self.reprendre_build_temps)
+        self.bouton_reprendre.pack(fill="x")
+        # Classement en ligne (v0.9.8) : publié seulement sur ce clic
+        self.bouton_publier = ttk.Button(boutons, text=t("cl_publier"), state="disabled", command=self.publier_temps)
+        if CLASSEMENT_ACTIF:
+            self.bouton_publier.pack(fill="x", pady=(8, 0))
+        self.afficher_detail_temps()
 
     def remplir_temps(self):
         """Relit temps.csv (le plus récent en haut) et marque les records."""
         try:
             with open(FICHIER_TEMPS_CSV, encoding="utf-8", newline="") as f:
-                lignes = list(csv.DictReader(f, delimiter=";"))
+                # (restkey : la colonne « Détail du build » de la v0.9.6 n'a pas
+                # d'en-tête dans un fichier commencé avec une version plus ancienne)
+                lignes = list(csv.DictReader(f, delimiter=";", restkey="_suite"))
         except OSError:
             lignes = []
-        # Record = plus petit temps (en secondes) par circuit + véhicule + tours,
-        # sans compter les courses où un save state a été utilisé (F8).
-        # Circuit et véhicule sont reconnus par leur nom interne / leur clé :
-        # un temps noté en français et un autre en anglais comptent ensemble.
+        for l in lignes:
+            texte = l.get("Détail du build") or (l.get("_suite") or [""])[0]
+            l["_detail"] = detail_build(texte)
+        # Record = plus petit temps (en secondes) par circuit + véhicule + tours
+        # + nombre d'adversaires, sans compter les courses où un save state a été
+        # utilisé (F8). Circuit et véhicule sont reconnus par leur nom interne /
+        # leur clé : un temps noté en français et un autre en anglais comptent ensemble.
         vehicule_de = self.catalogue.cle_vehicule if self.catalogue else (lambda nom: nom)
 
         def cle_ligne(l):
-            return cle_circuit(l.get("Circuit")), vehicule_de(l.get("Véhicule")), l.get("Nb tours")
+            return (cle_circuit(l.get("Circuit")), vehicule_de(l.get("Véhicule")), l.get("Nb tours"),
+                    l["_detail"].get("adversaires", "0"), l["_detail"].get("difficulte", ""))
 
         records = {}
         for l in lignes:
@@ -734,7 +1037,10 @@ class Fenetre(tk.Tk):
                 cle = cle_ligne(l)
                 records[cle] = min(s, records.get(cle, s))
         circuit, vehicule = self.circuit_et_vehicule_choisis()
+        selection = self.table_temps.selection()
+        ancienne = self.lignes_temps.get(selection[0]) if selection else None
         self.table_temps.delete(*self.table_temps.get_children())
+        self.lignes_temps = {}
         for l in reversed(lignes):
             cle = cle_ligne(l)
             if self.var_filtre_temps.get() and (cle[0] != cle_circuit(circuit) or cle[1] != vehicule_de(vehicule)):
@@ -745,10 +1051,153 @@ class Fenetre(tk.Tk):
             except ValueError:
                 est_record = False
             temps = ("★ " if est_record else "") + l.get("Temps", "") + ("  (save state)" if save_state else "")
+            d = l["_detail"]
+            adversaires = int(d.get("adversaires", "0") or 0) if d.get("adversaires", "0").isdigit() else 0
+            place = f"{d['position']} / {adversaires + 1}" if adversaires and d.get("position") else ""
+            # Colonne « En ligne » : place au moment de la publication, ou ✔ si un
+            # meilleur temps du même pseudo est celui du classement
+            publie = self.publies.get(C.cle_publication(l))
+            en_ligne = ""
+            if isinstance(publie, dict):
+                en_ligne = f"#{publie.get('rang')} / {publie.get('total')}" if publie.get("record", True) else "✔"
             valeurs = (l.get("Date", ""), l.get("Planète", ""), l.get("Circuit", ""), l.get("Nb tours", ""),
-                       l.get("Véhicule", ""), l.get("Pilote", ""), temps, l.get("Meilleur tour", ""),
-                       l.get("Détail des tours", ""))
-            self.table_temps.insert("", "end", values=valeurs, tags=("record",) if est_record else ())
+                       l.get("Véhicule", ""), l.get("Pilote", ""), temps, place, l.get("Meilleur tour", ""),
+                       l.get("Détail des tours", ""), en_ligne)
+            iid = self.table_temps.insert("", "end", values=valeurs, tags=("record",) if est_record else ())
+            self.lignes_temps[iid] = l
+            if ancienne is not None and l.get("Date") == ancienne.get("Date") and l.get("Temps") == ancienne.get("Temps"):
+                self.table_temps.selection_set(iid)
+        self.afficher_detail_temps()
+
+    # ── détail du build d'un temps ────────────────────────────────────────
+    def ligne_temps_choisie(self):
+        sel = self.table_temps.selection() if hasattr(self, "table_temps") else ()
+        return self.lignes_temps.get(sel[0]) if sel else None
+
+    def afficher_detail_temps(self):
+        """Panneau sous le tableau : le build complet de la course sélectionnée,
+        avec les noms du jeu dans la langue de la fenêtre."""
+        if not hasattr(self, "texte_detail"):
+            return
+        zone = self.texte_detail
+        zone.configure(state="normal")
+        zone.delete("1.0", "end")
+        l = self.ligne_temps_choisie()
+        d = l["_detail"] if l else {}
+        self.bouton_reprendre.configure(state="normal" if d.get("niveaux") and self.catalogue else "disabled")
+        publiable = bool(d.get("niveaux")) and (l or {}).get("Save state") != "oui"
+        self.bouton_publier.configure(state="normal" if publiable and not self.publication_en_cours else "disabled")
+        if not l:
+            zone.insert("end", t("detail_vide"), "note")
+        elif not d.get("niveaux"):
+            zone.insert("end", l.get("Build", "") + "\n")
+            zone.insert("end", t("detail_ancien"), "note")
+        else:
+            self.ecrire_build(zone, d, self.catalogue.cle_vehicule(l.get("Véhicule", "")) if self.catalogue else "")
+            publie = self.publies.get(C.cle_publication(l))
+            if isinstance(publie, dict):
+                self.a_la_ligne(zone)
+                zone.insert("end", t("cl_detail_publie"), "en_ligne")
+                if publie.get("record", True):
+                    zone.insert("end", t("cl_detail_publie_texte", quand=publie.get("quand", ""),
+                                         pseudo=publie.get("pseudo", ""), place=self.place(publie.get("rang")),
+                                         total=publie.get("total", "?"),
+                                         categorie=self.nom_categorie(publie.get("categorie", ""))))
+                else:
+                    zone.insert("end", t("cl_detail_publie_garde", quand=publie.get("quand", ""),
+                                         pseudo=publie.get("pseudo", ""),
+                                         categorie=self.nom_categorie(publie.get("categorie", ""))))
+        zone.configure(state="disabled")
+
+    def ecrire_build(self, zone, d, cle_veh):
+        """Écrit le build d'une course dans une zone de texte, avec les noms du
+        jeu dans la langue de la fenêtre. `d` : les clés de la colonne « Détail
+        du build » de temps.csv (« niveaux », « capacites »…), en texte ;
+        `cle_veh` : motojet / voiture… (le nom de la 6e stat en dépend)."""
+        cat = self.catalogue
+        numero = 2
+        for nom_arch, (cle, _tag, num) in TYPES.items():
+            if cle == cle_veh:
+                numero = num
+        niveaux = [n for n in d.get("niveaux", "").split(",") if n != ""]
+        stats = []
+        for i, n in enumerate(niveaux[:6]):
+            nom = cat.nom_stat(i, numero).split("  (")[0] if cat else t("stats_secours")[i]
+            stats.append(f"{nom} {n}")
+
+        def nom_capacite(chemin):
+            c = cat.capacite_par_chemin.get(chemin) if cat else None
+            return c["texte"].split("   (")[0] if c else nom_court(chemin.rsplit(".", 1)[-1])
+
+        def nom_affixe(chemin):
+            a = cat.par_chemin.get(chemin) if cat else None
+            return a["texte"] if a else chemin.rsplit(".", 1)[-1]
+
+        caps = [nom_capacite(c) for c in d.get("capacites", "").split("|") if c]
+        affixes = [nom_affixe(a) for a in d.get("affixes", "").split("|") if a]
+        traits = [cat.nom_trait(x) if cat else x for x in d.get("traits", "").split("|") if x]
+        options = [nom for nom, cle in (("Afterburner", "boost"), ("Ramjet", "ramjet"),
+                                        (t("opt_pannes"), "pannes"), (t("detail_illimites"), "crashs_illimites"))
+                   if d.get(cle) == "1"]
+        adversaires = int(d["adversaires"]) if d.get("adversaires", "").isdigit() else 0
+        if adversaires:
+            course = t("detail_course_ia", n=adversaires)
+            if d.get("difficulte"):
+                course += t("detail_difficulte", d=self.nom_difficulte(d["difficulte"]))
+            if d.get("position"):
+                course += t("detail_place", p=d["position"], total=adversaires + 1)
+        else:
+            course = t("detail_seul")
+        zone.insert("end", course + "\n", "cle")
+        zone.insert("end", t("recap_stats"), "cle")
+        zone.insert("end", " · ".join(stats) + "\n")
+        zone.insert("end", t("recap_capacites"), "cle")
+        zone.insert("end", (", ".join(caps) or t("aucune_sans")) + "\n")
+        zone.insert("end", t("recap_crash"), "cle")
+        zone.insert("end", (nom_capacite(d["crash"]) if d.get("crash") else t("aucune_sans")) + "\n")
+        zone.insert("end", t("recap_affixes", n=len(affixes)), "cle")
+        zone.insert("end", (", ".join(affixes) or t("aucun_sans")) + "\n")
+        zone.insert("end", t("recap_options"), "cle")
+        zone.insert("end", (", ".join(options) or t("aucune_sans")) + "\n")
+        style = cat.style_par_chemin.get(d.get("style", "")) if cat else None
+        if style or traits:
+            zone.insert("end", t("detail_style"), "cle")
+            zone.insert("end", ((style["texte"] + " — ") if style else "") + (", ".join(traits) or t("style_sans_buff")))
+
+    def reprendre_build_temps(self):
+        """Remet dans l'onglet Build le build de la course sélectionnée."""
+        l = self.ligne_temps_choisie()
+        if not l or not l["_detail"].get("niveaux") or not self.catalogue:
+            return
+        self.reprendre_build(l["_detail"], t("build_repris", date=l.get("Date", "")),
+                             self.catalogue.cle_vehicule(l.get("Véhicule", "")), l.get("Véhicule", ""))
+
+    def reprendre_build(self, d, etat, cle_course, nom_vehicule):
+        """Remet un build dans l'onglet Build. `d` : clés de la colonne « Détail
+        du build » (une course de Mes temps, ou un temps du classement en ligne) ;
+        `etat` : message de la ligne d'état ; `cle_course` / `nom_vehicule` : le
+        véhicule de la course (pour prévenir s'il n'est pas celui choisi)."""
+        self.appliquer_build({
+            "niveaux": [int(n) if n.isdigit() else 0 for n in d.get("niveaux", "").split(",")],
+            "capacites": [c for c in d.get("capacites", "").split("|") if c],
+            "crash": d.get("crash", ""),
+            "affixes": [a for a in d.get("affixes", "").split("|") if a],
+            "boost": d.get("boost") == "1", "ramjet": d.get("ramjet") == "1", "pannes": d.get("pannes") == "1",
+        })
+        if d.get("crashs_illimites") in ("0", "1"):
+            self.var_illimites.set(d["crashs_illimites"] == "1")
+        self.style_choisi = d.get("style", "")
+        self.traits_choisis = [x for x in d.get("traits", "").split("|") if x]
+        self.afficher_style()
+        self.rafraichir_recap()
+        # Le build dépend du véhicule (6e stat, capacités) : on prévient si la
+        # course était sur un autre véhicule que celui choisi. On ne change pas
+        # le véhicule nous-mêmes, sinon le build du pilote serait rechargé par-dessus.
+        connues = {cle for cle, _a, _t, _n in self.catalogue.vehicules}
+        if cle_course in connues and cle_course != self.var_type.get():
+            etat += t("build_repris_vehicule", vehicule=nom_vehicule)
+        self.var_etat.set(etat)
+        self.onglets.select(1)
 
     def circuit_et_vehicule_choisis(self):
         """Noms (tels qu'écrits dans temps.csv) du circuit et du véhicule sélectionnés."""
@@ -776,15 +1225,25 @@ class Fenetre(tk.Tk):
         for enfant in self.cadre_types.winfo_children():
             enfant.destroy()
         for cle, affiche, _tag, _num in self.catalogue.vehicules:
-            ttk.Radiobutton(self.cadre_types, text=affiche, value=cle, variable=self.var_type,
-                            command=self.type_change).pack(side="left", padx=6)
+            ttk.Radiobutton(self.cadre_types, text=affiche.upper(), value=cle, variable=self.var_type,
+                            style="Segment.Toolbutton", command=self.type_change).pack(side="left")
         self.remplir_pilotes()
         self.remplir_planetes()
         self.remplir_build()
+        self.remplir_difficultes()
+        self.afficher_tableaux()     # (noms des circuits du classement en ligne)
+        self.afficher_classement()
 
     def type_change(self):
         self.remplir_planetes()
         self.renommer_stats()
+        self.afficher_tableaux()   # (classements en ligne du véhicule choisi, déjà lus)
+        # Le pilote n'a pas le même style en module et sur les autres véhicules
+        pilote = self.pilote_selectionne()[0]
+        if pilote and self.var_build_pilote.get() and self.catalogue and self.catalogue.styles_lus:
+            style = self.catalogue.style_pour(pilote, self.var_type.get())
+            if (style["chemin"] if style else "") != self.style_choisi:
+                self.charger_build_pilote()
         self.rafraichir_recap()
 
     def info_vehicule(self):
@@ -859,7 +1318,10 @@ class Fenetre(tk.Tk):
             if arbre.exists(self.pilote):
                 arbre.selection_set(self.pilote)
             return
+        change = sel[0] != self.pilote   # (la sélection remise par le programme ne compte pas)
         self.pilote = sel[0]
+        if change and self.var_build_pilote.get():
+            self.charger_build_pilote()
 
     def pilote_selectionne(self):
         """(chemin du pilote, nom affiché) ; chemin vide = pilote par défaut."""
@@ -874,6 +1336,52 @@ class Fenetre(tk.Tk):
             tours = self.circuits_affiches[sel[0]].get("tours")
             if isinstance(tours, int) and tours > 0:
                 self.var_tours.set(tours)
+
+    # ── difficulté des IA (v0.9.7) ────────────────────────────────────────
+    def nom_difficulte(self, niveau):
+        """Nom du niveau dans la langue de la fenêtre : celui du jeu s'il est
+        connu (difficultes.json, traduit), sinon Recrue / Pilote / As / Antagoniste
+        (Cadet / Pilot / Ace / Champion en anglais)."""
+        if niveau not in NIVEAUX_DIFFICULTE:
+            return niveau
+        d = self.catalogue.difficultes.get(niveau) if self.catalogue else None
+        return (d or {}).get("affiche") or t("niv_" + niveau)
+
+    def remplir_difficultes(self):
+        if not hasattr(self, "combo_difficulte"):
+            return
+        noms = [t("difficulte_jeu")] + [self.nom_difficulte(n) for n in NIVEAUX_DIFFICULTE]
+        self.combo_difficulte["values"] = noms
+        self.var_difficulte.set(self.nom_difficulte(self.difficulte) if self.difficulte else noms[0])
+        self.decrire_difficulte()
+
+    def difficulte_choisie(self):
+        i = self.combo_difficulte.current()
+        self.difficulte = NIVEAUX_DIFFICULTE[i - 1] if i > 0 else ""
+        self.decrire_difficulte()
+
+    def nombre_adversaires(self):
+        try:
+            return max(0, min(NB_ADVERSAIRES_MAX, int(self.var_adversaires.get())))
+        except (tk.TclError, ValueError):
+            return 0
+
+    def decrire_difficulte(self):
+        """À côté du choix : la description du jeu et ce que le mod change."""
+        if not self.difficulte:
+            texte = t("difficulte_jeu_aide")
+        else:
+            morceaux = []
+            d = self.catalogue.difficultes.get(self.difficulte) if self.catalogue else None
+            if d and d.get("description"):
+                morceaux.append(d["description"].strip())
+            reglages = (self.catalogue.reglages_difficulte if self.catalogue else {}).get(self.difficulte)
+            if reglages is not None:
+                morceaux.append(t("difficulte_mod", reglages=texte_reglages(reglages)))
+            texte = "  ".join(morceaux)
+        if self.nombre_adversaires() == 0:
+            texte = (texte + "  " if texte else "") + t("difficulte_seul")
+        self.var_difficulte_texte.set(texte)
 
     # ── onglet Build ──────────────────────────────────────────────────────
     def remplir_build(self):
@@ -897,6 +1405,14 @@ class Fenetre(tk.Tk):
         self.affixes_choisis = [a for a in self.affixes_choisis if a in cat.par_chemin]
         self.renommer_stats()
         self.remplir_affixes()
+        self.afficher_style()
+
+    def niveau_change(self, var, valeur):
+        """Curseur d'une stat : niveaux entiers seulement, puis récapitulatif."""
+        entier = int(round(float(valeur)))
+        if var.get() != entier:
+            var.set(entier)
+        self.rafraichir_recap()
 
     def renommer_stats(self):
         """Met les noms des stats du jeu sur les curseurs (le 6e dépend du véhicule)."""
@@ -1028,7 +1544,10 @@ class Fenetre(tk.Tk):
                                         (t("opt_pannes"), self.var_pannes),
                                         (t("opt_illimites"), self.var_illimites)) if var.get()]
         zone.insert("end", t("recap_options"), "cle")
-        zone.insert("end", ", ".join(options) or t("aucune_sans"))
+        zone.insert("end", (", ".join(options) or t("aucune_sans")) + "\n")
+        zone.insert("end", t("recap_buffs"), "cle")
+        zone.insert("end", ", ".join(cat.nom_trait(x) for x in self.traits_choisis) if cat and self.traits_choisis
+                    else t("style_sans_buff"))
         zone.configure(state="disabled")
 
     def resume_build(self):
@@ -1043,11 +1562,145 @@ class Fenetre(tk.Tk):
                     t("resume_affixes", n=len(noms_aff)) + (", ".join(noms_aff) or t("aucun_sans"))]
         if self.var_illimites.get():
             morceaux.append(t("resume_illimites"))
+        if self.traits_choisis and cat:
+            morceaux.append(t("resume_buffs") + ", ".join(cat.nom_trait(x) for x in self.traits_choisis))
         return " · ".join(morceaux).replace("|", "/")
 
     def retirer_affixes(self):
         self.affixes_choisis = []
         self.remplir_affixes()
+
+    # ── style du pilote : build et buffs (v0.9.6) ─────────────────────────
+    def appliquer_build(self, b):
+        """Met un build dans l'onglet Build. `b` : niveaux (liste de 6),
+        capacites (chemins), crash, affixes (chemins), boost, ramjet, pannes.
+        Les clés absentes ne changent rien."""
+        cat = self.catalogue
+        texte_par_chemin = {v: k for k, v in self.chemin_par_texte.items()}
+        if "niveaux" in b:
+            for i, v in enumerate(self.var_niveaux):
+                v.set(max(0, min(NIVEAU_MAX, b["niveaux"][i] if i < len(b["niveaux"]) else 0)))
+        if "capacites" in b:
+            caps = [c for c in b["capacites"] if c in texte_par_chemin][:NB_CAPACITES]
+            for i, v in enumerate(self.var_capacites):
+                v.set(texte_par_chemin[caps[i]] if i < len(caps) else aucune())
+        if "crash" in b:
+            self.var_crash.set(texte_par_chemin.get(b["crash"] or "", aucune()))
+        if "affixes" in b:
+            self.affixes_choisis = [a for a in b["affixes"] if cat and a in cat.par_chemin]
+        for cle, var in (("boost", self.var_boost), ("ramjet", self.var_ramjet), ("pannes", self.var_pannes)):
+            if cle in b and b[cle] is not None:
+                var.set(bool(b[cle]))
+        self.remplir_affixes()
+
+    def charger_build_pilote(self):
+        """Le build et les buffs du pilote choisi, pour le véhicule choisi :
+        stats, capacités, crash, affixes et options de son build (s'il en a un),
+        ses capacités de départ, et ses traits (buffs), tous cochés."""
+        cat = self.catalogue
+        if not cat:
+            return
+        pilote, nom_pilote = self.pilote_selectionne()
+        if not pilote:
+            self.style_choisi, self.traits_choisis = "", []
+            self.afficher_style()
+            self.rafraichir_recap()
+            return
+        if not cat.styles_lus:
+            self.var_etat.set(t("style_attente"))
+            return
+        style = cat.style_pour(pilote, self.var_type.get())
+        if not style:
+            self.style_choisi, self.traits_choisis = "", []
+            self.afficher_style()
+            self.rafraichir_recap()
+            self.var_etat.set(t("style_absent", pilote=nom_pilote))
+            return
+        # Module (v2.0.0) : les builds des styles de pods relevés dans le jeu
+        # (VBD_MP_*) n'ont ni capacité ni statoréacteur, et des niveaux très bas
+        # (vu le 12/10/2026 avec Sebulba) : le jeu donne ces éléments ailleurs.
+        # Le build de la fenêtre est donc gardé ; seuls les buffs sont proposés.
+        if not self.build_style_garde(style):
+            b = style.get("build") or {}
+            capacites = list(style.get("capacites") or [])
+            capacites += [c for c in (b.get("capacites") or []) if c and c not in capacites]
+            nouveau = {"capacites": capacites} if capacites else {}
+            if b:
+                niveaux = b.get("niveaux") or {}
+                nouveau.update({
+                    "niveaux": [int(niveaux.get(str(i), 0) or 0) for i in range(6)],
+                    "crash": b.get("crash") or "",
+                    "affixes": [a for a in (b.get("affixes") or []) if a],
+                    "boost": b.get("boost") == 1 if b.get("boost") is not None else None,
+                    "ramjet": b.get("ramjet"),
+                    "pannes": b.get("pannes"),
+                })
+            self.appliquer_build(nouveau)
+        self.style_choisi = style["chemin"]
+        self.traits_choisis = list(style.get("traits") or [])
+        self.afficher_style()
+        self.rafraichir_recap()
+        self.var_etat.set(t("buffs_pilote_charges" if self.build_style_garde(style) else "build_pilote_charge",
+                            pilote=nom_pilote, style=style["texte"], n=len(self.traits_choisis)))
+
+    def build_style_garde(self, style):
+        """Vrai si le build de la fenêtre est gardé au chargement de ce style :
+        module dont le style n'a pas de capacité (builds VBD_MP_* du jeu, sans
+        capacité ni statoréacteur ; seuls ses buffs sont proposés)."""
+        return self.var_type.get() == "avion" and not (style or {}).get("capacites")
+
+    def afficher_style(self):
+        """Nom du style choisi et ses buffs (une case par trait)."""
+        if not hasattr(self, "cadre_traits"):
+            return
+        for enfant in self.cadre_traits.winfo_children():
+            enfant.destroy()
+        cat = self.catalogue
+        style = cat.style_par_chemin.get(self.style_choisi) if cat else None
+        if not self.style_choisi and not self.traits_choisis:
+            self.var_style_texte.set(t("style_aucun"))
+            return
+        _chemin, nom_pilote = self.pilote_selectionne()
+        nom_style = style["texte"] if style else nom_court(self.style_choisi.rsplit(".", 1)[-1])
+        self.var_style_texte.set(t("style_nom", style=nom_style, pilote=nom_pilote))
+        if style and self.build_style_garde(style):
+            ttk.Label(self.cadre_traits, text=t("style_module_build_garde"), style="Doux.TLabel", wraplength=300,
+                      justify="left").pack(anchor="w")
+        elif style and not style.get("build"):
+            # Le style a un build, mais le jeu ne l'avait pas en mémoire au menu
+            # (le mod ne charge plus rien depuis le disque) : on le dit
+            cle = "style_build_absent" if style.get("build_chemin") else "style_sans_build"
+            ttk.Label(self.cadre_traits, text=t(cle), style="Doux.TLabel", wraplength=300,
+                      justify="left").pack(anchor="w")
+        traits = list(style.get("traits") or []) if style else []
+        traits += [x for x in self.traits_choisis if x not in traits]
+        if not traits:
+            ttk.Label(self.cadre_traits, text=t("style_sans_buff"), style="Doux.TLabel").pack(anchor="w")
+        for chemin in traits:
+            var = tk.BooleanVar(value=chemin in self.traits_choisis)
+            case = ttk.Checkbutton(self.cadre_traits, text=cat.nom_trait(chemin) if cat else chemin, variable=var,
+                                   command=lambda c=chemin, v=var: self.cocher_trait(c, v.get()))
+            case.var = var   # (garde la variable en vie)
+            case.pack(fill="x", pady=1)
+            case.bind("<Enter>", lambda e, c=chemin: self.decrire_trait(c))
+
+    def cocher_trait(self, chemin, coche):
+        if coche and chemin not in self.traits_choisis:
+            self.traits_choisis.append(chemin)
+        elif not coche and chemin in self.traits_choisis:
+            self.traits_choisis.remove(chemin)
+        self.decrire_trait(chemin)
+        self.rafraichir_recap()
+
+    def decrire_trait(self, chemin):
+        tr = self.catalogue.trait_par_chemin.get(chemin) if self.catalogue else None
+        if tr:
+            self.ecrire_description(tr["texte"], [(tr.get("description", ""), tr.get("perc"), tr.get("int"), False)])
+
+    def decrire_style(self):
+        s = self.catalogue.style_par_chemin.get(self.style_choisi) if self.catalogue else None
+        if s:
+            self.ecrire_description(s["texte"], [(s.get("description", ""), {}, {}, False)])
 
     def build_a_zero(self):
         for v in self.var_niveaux:
@@ -1070,7 +1723,534 @@ class Fenetre(tk.Tk):
             "ramjet": "1" if self.var_ramjet.get() else "0",
             "pannes": "1" if self.var_pannes.get() else "0",
             "crashs_illimites": "1" if self.var_illimites.get() else "0",
+            "style": self.style_choisi,
+            "traits": "|".join(self.traits_choisis),
         }, capacites
+
+    # ═════════════════════════════════════════════════════════════════════
+    #  CLASSEMENT EN LIGNE (v0.9.8)
+    #  Seule la fenêtre parle au serveur (classement.py), et seulement après
+    #  un clic : « Publier ce temps », ouverture de l'onglet, « Actualiser »…
+    #  Les appels tournent en tâche de fond ; leurs réponses reviennent ici
+    #  par une file lue toutes les 0,1 s (Tk ne se manipule que d'ici).
+    # ═════════════════════════════════════════════════════════════════════
+    def _construire_classement(self, page):
+        """Onglet Classement :
+             [Pseudo] [aide]                              [Serveur : adresse] [Tester]
+             [SOLO SANS BUILD|SOLO AVEC BUILD|IA SANS BUILD|IA AVEC BUILD]  [Circuit choisi] [Actualiser]
+             [Classements de la catégorie] [Le classement choisi                ]
+             [Temps sélectionné : son build                       ] [Reprendre ce build]
+             état du classement"""
+        P = self.polices
+        page.columnconfigure(1, weight=1)
+        page.rowconfigure(2, weight=1)
+
+        haut = ttk.Frame(page)
+        haut.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        ttk.Label(haut, text=t("cl_pseudo").upper(), style="Titre.TLabel").pack(side="left")
+        self.entree_pseudo = ttk.Entry(haut, textvariable=self.var_pseudo, width=14, font=P.valeur,
+                                       style="Arcade.TEntry")
+        self.entree_pseudo.pack(side="left", padx=(8, 10))
+        ttk.Label(haut, text=t("cl_pseudo_aide"), style="Doux.TLabel").pack(side="left")
+        ttk.Button(haut, text=t("cl_tester"), command=self.tester_serveur).pack(side="right")
+        ttk.Entry(haut, textvariable=self.var_adresse, width=38).pack(side="right", padx=(6, 6))
+        ttk.Label(haut, text=t("cl_serveur")).pack(side="right")
+
+        ligne = ttk.Frame(page)
+        ligne.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        for code in C.CATEGORIES:
+            ttk.Radiobutton(ligne, text=self.nom_categorie(code).upper(), value=code, variable=self.var_categorie,
+                            style="Segment.Toolbutton", command=self.categorie_changee).pack(side="left")
+        ttk.Button(ligne, text=t("cl_actualiser"), command=self.actualiser_classement).pack(side="right")
+        ttk.Button(ligne, text=t("cl_ce_circuit"),
+                   command=self.classement_du_circuit_choisi).pack(side="right", padx=(0, 8))
+
+        # Liste des classements à gauche, le classement choisi à droite ; la
+        # séparation se déplace à la souris
+        panneaux = ttk.Panedwindow(page, orient="horizontal")
+        panneaux.grid(row=2, column=0, columnspan=2, sticky="nsew")
+
+        # À gauche : les classements de la catégorie qui ont déjà des temps,
+        # pour le véhicule choisi en haut de la fenêtre (comme l'onglet Course)
+        gauche = ttk.LabelFrame(panneaux, text=t("cl_titre_tableaux").upper(), padding=6)
+        panneaux.add(gauche, weight=2)
+        gauche.rowconfigure(0, weight=1)
+        gauche.columnconfigure(0, weight=1)
+        titres = t("cl_colonnes_tableaux")
+        colonnes = ("tours", "nb", "record")
+        self.liste_tableaux = ttk.Treeview(gauche, columns=colonnes, show="tree headings", selectmode="browse",
+                                           height=6)
+        self.liste_tableaux.heading("#0", text=titres[0])
+        self.liste_tableaux.column("#0", width=235, minwidth=140)
+        for col, titre, largeur in zip(colonnes, titres[1:], (60, 62, 160)):
+            self.liste_tableaux.heading(col, text=titre)
+            self.liste_tableaux.column(col, width=largeur, minwidth=largeur, anchor="w", stretch=False)
+        defil = ttk.Scrollbar(gauche, orient="vertical", command=self.liste_tableaux.yview)
+        self.liste_tableaux.configure(yscrollcommand=defil.set)
+        self.liste_tableaux.grid(row=0, column=0, sticky="nsew")
+        defil.grid(row=0, column=1, sticky="ns")
+        self.liste_tableaux.bind("<<TreeviewSelect>>", lambda e: self.tableau_choisi())
+
+        # À droite : le classement choisi
+        droite = ttk.LabelFrame(panneaux, text=t("cl_titre_classement").upper(), padding=6)
+        panneaux.add(droite, weight=3)
+        droite.rowconfigure(1, weight=1)
+        droite.columnconfigure(0, weight=1)
+        ttk.Label(droite, textvariable=self.var_classement_titre, style="Titre.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        colonnes = ("rang", "pseudo", "temps", "ecart", "meilleur", "pilote", "ia", "difficulte", "place", "date")
+        self.table_classement = ttk.Treeview(droite, columns=colonnes, show="headings", selectmode="browse",
+                                             height=6, displaycolumns=colonnes[:6] + ("date",))
+        for col, titre, largeur in zip(colonnes, t("cl_colonnes"), (40, 108, 80, 62, 104, 120, 36, 86, 56, 90)):
+            self.table_classement.heading(col, text=titre)
+            self.table_classement.column(col, width=largeur, minwidth=min(largeur, 60),
+                                         anchor="e" if col == "rang" else "w", stretch=col == "pilote")
+        defil = ttk.Scrollbar(droite, orient="vertical", command=self.table_classement.yview)
+        self.table_classement.configure(yscrollcommand=defil.set)
+        self.table_classement.grid(row=1, column=0, sticky="nsew")
+        defil.grid(row=1, column=1, sticky="ns")
+        self.table_classement.tag_configure("or", foreground=T.AMBRE, font=P.gras)
+        self.table_classement.tag_configure("moi", background=T.CHAMP_SURVOL, foreground=T.NEON, font=P.gras)
+        self.table_classement.tag_configure("separation", foreground=T.TEXTE_DOUX)
+        self.table_classement.bind("<<TreeviewSelect>>", lambda e: self.afficher_detail_classement())
+        self.table_classement.bind("<Configure>", lambda e: self.ajuster_colonnes())
+
+        # En bas : le build du temps sélectionné, à reprendre si l'on veut
+        detail = ttk.LabelFrame(page, text=t("cl_detail_titre").upper(), padding=6)
+        detail.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        detail.columnconfigure(0, weight=1)
+        self.texte_detail_classement = tk.Text(detail, height=8, wrap="word", font=P.texte)
+        self.texte_detail_classement.grid(row=0, column=0, sticky="ew")
+        self.texte_detail_classement.tag_configure("cle", font=P.gras, foreground=T.NEON)
+        self.texte_detail_classement.tag_configure("note", foreground=T.TEXTE_DOUX)
+        self.bouton_reprendre_classement = ttk.Button(detail, text=t("detail_reprendre"), state="disabled",
+                                                      command=self.reprendre_build_classement)
+        self.bouton_reprendre_classement.grid(row=0, column=1, sticky="ne", padx=(8, 0))
+        ttk.Label(page, textvariable=self.var_classement_etat, style="Doux.TLabel").grid(
+            row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        # (après un changement de langue : les dernières lectures, sans rien redemander)
+        self.afficher_tableaux()
+        self.afficher_classement()
+
+    # ── noms affichés ─────────────────────────────────────────────────────
+    def nom_categorie(self, code):
+        return t("categories_classement").get(code, code)
+
+    @staticmethod
+    def place(rang):
+        """1 → « 1er » ; 3 → « 3e » (en anglais : « #1 », « #3 »)."""
+        if not isinstance(rang, int):
+            return "?"
+        return t("cl_place_1") if rang == 1 else t("cl_place_n", n=rang)
+
+    def nom_circuit_en_ligne(self, nom):
+        """TRAK_… → nom du circuit dans le jeu, avec ses caractéristiques."""
+        c = self.catalogue.circuit_par_nom(nom) if self.catalogue else None
+        return c["texte"].rsplit("  [", 1)[0] if c else nom
+
+    def nom_vehicule_en_ligne(self, cle):
+        return self.catalogue.nom_vehicule(cle) if self.catalogue else cle
+
+    def nom_pilote_en_ligne(self, nom):
+        """DA_Racer_Star → nom du pilote dans le jeu (sinon le nom interne raccourci)."""
+        texte = self.catalogue.texte_pilote.get(nom) if self.catalogue and nom else None
+        return texte or (nom or "").replace("DA_PlaneRacer_", "").replace("DA_Racer_", "")
+
+    def titre_tableau(self, tableau):
+        return t("cl_tableau", circuit=self.nom_circuit_en_ligne(tableau["circuit"]),
+                 vehicule=self.nom_vehicule_en_ligne(tableau["vehicule"]), tours=tableau["tours"],
+                 categorie=self.nom_categorie(tableau["categorie"]))
+
+    @staticmethod
+    def a_la_ligne(zone):
+        """Passe à la ligne, sauf si le texte est vide ou se termine déjà par un retour."""
+        if zone.get("1.0", "end-1c") and zone.get("end-2c", "end-1c") != "\n":
+            zone.insert("end", "\n")
+
+    # ── appels au serveur, en tâche de fond ───────────────────────────────
+    def en_fond(self, travail, puis):
+        """`travail()` tourne dans une tâche de fond (la fenêtre ne se fige
+        jamais, même sans Internet), puis `puis(resultat, erreur)` ici."""
+        def tache():
+            try:
+                resultat, erreur = travail(), None
+            except C.ErreurClassement as e:
+                resultat, erreur = None, e
+            except Exception as e:   # filet de sécurité : la réponse revient toujours
+                resultat, erreur = None, C.ErreurClassement("interne", repr(e))
+            self.file_reseau.put((puis, resultat, erreur))
+        threading.Thread(target=tache, daemon=True).start()
+
+    def lire_reseau(self):
+        try:
+            while not self.file_reseau.empty():
+                puis, resultat, erreur = self.file_reseau.get()
+                try:
+                    puis(resultat, erreur)
+                except tk.TclError:   # (fenêtre reconstruite entre-temps : changement de langue)
+                    pass
+                except Exception as e:
+                    self.var_etat.set(self.texte_erreur(C.ErreurClassement("interne", repr(e))))
+        finally:
+            self.after(100, self.lire_reseau)
+
+    def texte_erreur(self, e):
+        textes = t("err_classement")
+        if e.code in textes:
+            return "✖ " + textes[e.code].format(detail=e.detail)
+        return "✖ " + t("err_classement_autre", code=e.code)
+
+    # ── pseudo, jeton, adresse ────────────────────────────────────────────
+    def pseudo_tape(self):
+        """Pendant la frappe : majuscules sans accents, caractères permis, 12 au plus."""
+        texte = self.var_pseudo.get()
+        propre = C.nettoyer_saisie(texte)
+        if propre != texte:
+            self.var_pseudo.set(propre)
+
+    def jeton(self):
+        """Le jeton de cette fenêtre : tiré au hasard la première fois, puis
+        gardé dans les préférences. Il réserve le pseudo à cette fenêtre."""
+        jeton = self.pref_classement.get("jeton", "")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", jeton):
+            jeton = C.nouveau_jeton()
+            self.pref_classement["jeton"] = jeton
+            self.enregistrer_preferences()
+        return jeton
+
+    def adresse(self):
+        return self.var_adresse.get().strip()
+
+    def tester_serveur(self):
+        adresse = self.adresse()
+        if not C.adresse_valable(adresse):
+            self.var_classement_etat.set(self.texte_erreur(C.ErreurClassement("adresse")))
+            return
+        self.enregistrer_preferences()
+        self.var_classement_etat.set(t("cl_chargement"))
+        self.en_fond(lambda: C.verifier(adresse, VERSION), self.serveur_teste)
+
+    def serveur_teste(self, _api, e):
+        if e:
+            self.var_classement_etat.set(self.texte_erreur(e))
+            return
+        self.var_classement_etat.set(t("cl_serveur_ok"))
+        self.actualiser_classement(etat=False)
+
+    # ── publier un temps (onglet Mes temps) ───────────────────────────────
+    def publier_temps(self):
+        l = self.ligne_temps_choisie()
+        if not CLASSEMENT_ACTIF or not l or self.publication_en_cours:
+            return
+        pseudo = C.normaliser_pseudo(self.var_pseudo.get())
+        if not C.pseudo_valide(pseudo):
+            self.var_etat.set(t("cl_refus")["pseudo_invalide"])
+            self.onglets.select(self.page_classement)
+            self.entree_pseudo.focus_set()
+            return
+        if not C.adresse_valable(self.adresse()):
+            self.var_etat.set(self.texte_erreur(C.ErreurClassement("adresse")))
+            self.onglets.select(self.page_classement)
+            return
+        cat = self.catalogue
+        if not cat:
+            self.var_etat.set(t("cl_refus")["catalogue"])
+            return
+        envoi, raison = C.preparer_envoi(l, cat.circuit_interne(cle_circuit(l.get("Circuit"))),
+                                         cat.cle_vehicule(l.get("Véhicule", "")),
+                                         cat.pilote_par_nom.get(l.get("Pilote", ""), ""), pseudo, self.jeton(),
+                                         VERSION)
+        if raison:
+            self.var_etat.set(t("cl_refus")[raison])
+            return
+        self.enregistrer_preferences()   # (pseudo et adresse gardés pour la prochaine fois)
+        self.publication_en_cours = True
+        self.afficher_detail_temps()      # (bouton grisé pendant l'envoi)
+        self.var_etat.set(t("cl_publication"))
+        adresse, cle = self.adresse(), C.cle_publication(l)
+        self.en_fond(lambda: C.publier(adresse, envoi, VERSION), lambda r, e: self.temps_publie(cle, envoi, r, e))
+
+    def temps_publie(self, cle, envoi, r, e):
+        self.publication_en_cours = False
+        if e:
+            self.afficher_detail_temps()
+            self.var_etat.set(self.texte_erreur(e))
+            return
+        record = r.get("record_ms") == envoi["temps_ms"]   # ce temps est-il celui du classement ?
+        tableau = r.get("tableau") if isinstance(r.get("tableau"), dict) else {}
+        if record:   # (un temps publié avant, du même pseudo, n'est plus celui du classement)
+            for autre in self.publies.values():
+                if isinstance(autre, dict) and autre.get("pseudo") == r.get("pseudo") and all(
+                        autre.get(k) == tableau.get(k) for k in ("circuit", "vehicule", "tours", "categorie")):
+                    autre["record"] = False
+        self.publies[cle] = {"pseudo": r.get("pseudo"), "rang": r.get("rang"), "total": r.get("total"),
+                             "record": record, "record_ms": r.get("record_ms"),
+                             "quand": f"{datetime.now():%Y-%m-%d %H:%M}", **tableau}
+        ecrire_publies(self.publies)
+        message = t("cl_publie", place=self.place(r.get("rang")), total=r.get("total"),
+                    categorie=self.nom_categorie(r.get("categorie", "")))
+        if r.get("ameliore") and isinstance(r.get("ancien_ms"), int):
+            message += t("cl_record_battu", ancien=C.ms_vers_texte(r["ancien_ms"]))
+        elif not record and isinstance(r.get("record_ms"), int):
+            message += t("cl_record_garde", record=C.ms_vers_texte(r["record_ms"]))
+        self.remplir_temps()
+        self.var_etat.set(message)
+        # L'onglet Classement montrera ce classement-là (relu en tâche de fond)
+        if all(k in tableau for k in ("circuit", "vehicule", "tours", "categorie")):
+            self.var_categorie.set(tableau["categorie"])
+            self.tableau_affiche = {k: tableau[k] for k in ("circuit", "vehicule", "tours", "categorie")}
+            self.classement_ouvert = True
+            self.actualiser_classement()
+
+    # ── onglet Classement : lectures ──────────────────────────────────────
+    def onglet_change(self):
+        """Premier passage sur l'onglet Classement : on lit la liste des
+        classements (pas avant : rien ne part sur Internet sans qu'on regarde)."""
+        try:
+            courant = self.onglets.select()
+        except tk.TclError:
+            return
+        if not CLASSEMENT_ACTIF or courant != str(self.page_classement) or self.classement_ouvert:
+            return
+        if not C.adresse_valable(self.adresse()):   # (lu à la prochaine ouverture, une fois l'adresse mise)
+            self.var_classement_etat.set(t("cl_pas_configure"))
+            return
+        self.classement_ouvert = True
+        if self.tableau_affiche is None:
+            self.classement_du_circuit_choisi(seul=True)
+        self.actualiser_classement()
+
+    def actualiser_classement(self, etat=True):
+        self.classement_ouvert = True
+        self.charger_tableaux(etat)
+        if self.tableau_affiche:
+            self.charger_classement()
+
+    def categorie_changee(self):
+        """Autre catégorie : sa liste de classements, et le même circuit dans celle-ci."""
+        if self.tableau_affiche:
+            self.tableau_affiche = {**self.tableau_affiche, "categorie": self.var_categorie.get()}
+        self.afficher_tableaux()
+        self.afficher_classement()
+        self.actualiser_classement()
+
+    def classement_du_circuit_choisi(self, seul=False):
+        """Le classement du circuit, du véhicule et du nombre de tours choisis
+        dans l'onglet Course (même s'il n'a encore aucun temps). `seul` : sans
+        le lire (l'appelant s'en charge)."""
+        sel = self.liste_circuits.curselection() if hasattr(self, "liste_circuits") else ()
+        if not sel:
+            if not seul:
+                self.var_classement_etat.set(t("choisis_circuit"))
+            return
+        circuit = self.circuits_affiches[sel[0]]
+        try:
+            tours = max(1, min(20, int(self.var_tours.get())))
+        except (tk.TclError, ValueError):
+            tours = circuit.get("tours") or 3
+        self.tableau_affiche = {"circuit": circuit["nom"], "vehicule": self.var_type.get(), "tours": tours,
+                                "categorie": self.var_categorie.get()}
+        self.afficher_classement()
+        self.selectionner_tableau()
+        if not seul:
+            self.classement_ouvert = True
+            self.charger_classement()
+
+    def charger_tableaux(self, etat=True):
+        adresse, categorie = self.adresse(), self.var_categorie.get()
+        if not C.adresse_valable(adresse):
+            self.var_classement_etat.set(t("cl_pas_configure"))
+            return
+        self.numero_demande["tableaux"] += 1
+        numero = self.numero_demande["tableaux"]
+        if etat:
+            self.var_classement_etat.set(t("cl_chargement"))
+        self.en_fond(lambda: C.lire_tableaux(adresse, categorie, version=VERSION),
+                     lambda r, e: self.tableaux_lus(numero, categorie, r, e))
+
+    def tableaux_lus(self, numero, categorie, tableaux, e):
+        if numero != self.numero_demande["tableaux"]:
+            return   # (une demande plus récente est partie entre-temps)
+        if e:
+            self.var_classement_etat.set(self.texte_erreur(e))
+            return
+        self.cache_tableaux = (categorie, tableaux, f"{datetime.now():%H:%M}")
+        self.afficher_tableaux()
+
+    def afficher_tableaux(self):
+        """Liste des classements de la catégorie (dernière lecture), avec les noms du jeu."""
+        if not hasattr(self, "liste_tableaux"):
+            return
+        arbre = self.liste_tableaux
+        arbre.delete(*arbre.get_children())
+        if not self.cache_tableaux or self.cache_tableaux[0] != self.var_categorie.get():
+            return
+        _categorie, tableaux, heure = self.cache_tableaux
+        vehicule = self.var_type.get()
+        lignes = []
+        for tb in tableaux if isinstance(tableaux, list) else []:
+            try:
+                if tb["vehicule"] == vehicule:
+                    iid = f"{tb['circuit']}|{tb['vehicule']}|{int(tb['tours'])}"
+                    lignes.append((self.nom_circuit_en_ligne(tb["circuit"]).lower(), int(tb["tours"]), iid, tb))
+            except (KeyError, TypeError, ValueError):
+                continue
+        for _nom, tours, iid, tb in sorted(lignes, key=lambda x: x[:2]):
+            if arbre.exists(iid):
+                continue
+            record = f"{C.ms_vers_texte(tb.get('meilleur_ms'))}   {tb.get('meilleur_pseudo') or ''}"
+            arbre.insert("", "end", iid=iid, text=self.nom_circuit_en_ligne(tb["circuit"]),
+                         values=(tours, tb.get("nb", ""), record))
+        self.selectionner_tableau()
+        self.var_classement_etat.set(t("cl_tableaux_lus", n=len(lignes), heure=heure,
+                                       vehicule=self.nom_vehicule_en_ligne(vehicule)))
+
+    def selectionner_tableau(self):
+        """Dans la liste, met en surbrillance le classement affiché à droite."""
+        tb = self.tableau_affiche
+        if not tb or not hasattr(self, "liste_tableaux"):
+            return
+        iid = f"{tb['circuit']}|{tb['vehicule']}|{tb['tours']}"
+        if self.liste_tableaux.exists(iid):
+            self.liste_tableaux.selection_set(iid)
+            self.liste_tableaux.see(iid)
+        else:
+            self.liste_tableaux.selection_set(())
+
+    def tableau_choisi(self):
+        sel = self.liste_tableaux.selection()
+        if not sel:
+            return
+        circuit, vehicule, tours = sel[0].split("|")
+        tableau = {"circuit": circuit, "vehicule": vehicule, "tours": int(tours), "categorie": self.var_categorie.get()}
+        if tableau != self.tableau_affiche:   # (pas une sélection remise par le programme)
+            self.tableau_affiche = tableau
+            self.afficher_classement()
+            self.charger_classement()
+
+    def charger_classement(self):
+        tableau, adresse = self.tableau_affiche, self.adresse()
+        if not tableau:
+            return
+        if not C.adresse_valable(adresse):
+            self.var_classement_etat.set(t("cl_pas_configure"))
+            return
+        self.numero_demande["classement"] += 1
+        numero = self.numero_demande["classement"]
+        pseudo = C.normaliser_pseudo(self.var_pseudo.get())
+        pseudo = pseudo if C.pseudo_valide(pseudo) else ""
+        self.var_classement_titre.set(self.titre_tableau(tableau) + "  —  " + t("cl_chargement"))
+        self.en_fond(lambda: C.lire_classement(adresse, tableau["circuit"], tableau["vehicule"], tableau["tours"],
+                                               tableau["categorie"], pseudo, LIGNES_CLASSEMENT, VERSION),
+                     lambda r, e: self.classement_lu(numero, tableau, r, e))
+
+    def classement_lu(self, numero, tableau, r, e):
+        if numero != self.numero_demande["classement"]:
+            return
+        if e:
+            self.var_classement_titre.set(self.titre_tableau(tableau))
+            self.var_classement_etat.set(self.texte_erreur(e))
+            return
+        self.cache_classement = (tableau, r)
+        self.afficher_classement()
+
+    def afficher_classement(self):
+        """Le classement affiché (dernière lecture) : le 1er en ambre, son
+        propre pseudo en surbrillance (ajouté à la fin s'il est plus loin)."""
+        if not hasattr(self, "table_classement"):
+            return
+        table = self.table_classement
+        table.delete(*table.get_children())
+        self.entrees_classement = {}
+        tableau = self.tableau_affiche
+        if not self.cache_classement or self.cache_classement[0] != tableau:
+            self.var_classement_titre.set(self.titre_tableau(tableau) if tableau else t("cl_aucun_tableau"))
+            self.afficher_detail_classement()
+            return
+        r = self.cache_classement[1]
+        # Colonnes des courses avec IA (nombre, difficulté, place) : seulement pour les classements IA
+        table["displaycolumns"] = (("rang", "pseudo", "temps", "ecart", "meilleur", "pilote")
+                                   + (("ia", "difficulte", "place") if tableau["categorie"].startswith("ia") else ())
+                                   + ("date",))
+        self.ajuster_colonnes()
+        temps = [x for x in (r.get("temps") or []) if isinstance(x, dict)]
+        titre = self.titre_tableau(tableau)
+        self.var_classement_titre.set(titre + (t("cl_total", n=r.get("total", len(temps))) if temps
+                                               else "  —  " + t("cl_vide")))
+        moi = C.normaliser_pseudo(self.var_pseudo.get())
+        premier = temps[0].get("temps_ms") if temps else None
+
+        def inserer(x):
+            ms = x.get("temps_ms")
+            ecart = C.ecart_texte(ms - premier) if isinstance(ms, int) and isinstance(premier, int) else ""
+            adversaires = x.get("adversaires") if isinstance(x.get("adversaires"), int) else 0
+            place = f"{x['position']} / {adversaires + 1}" if x.get("position") and adversaires else ""
+            date = str(x.get("date_course") or x.get("date_envoi") or "")[:10]   # (le jour suffit)
+            valeurs = (x.get("rang", ""), x.get("pseudo", ""), C.ms_vers_texte(ms), ecart,
+                       C.ms_vers_texte(x.get("meilleur_tour_ms")), self.nom_pilote_en_ligne(x.get("pilote")),
+                       adversaires or "", self.nom_difficulte(x["difficulte"]) if x.get("difficulte") else "",
+                       place, date)
+            tags = (("or",) if x.get("rang") == 1 else ()) + (("moi",) if x.get("pseudo") == moi else ())
+            self.entrees_classement[table.insert("", "end", values=valeurs, tags=tags)] = x
+
+        for x in temps:
+            inserer(x)
+        lui = r.get("moi")
+        if isinstance(lui, dict) and all(x.get("pseudo") != lui.get("pseudo") for x in temps):
+            table.insert("", "end", values=("…",), tags=("separation",))
+            inserer(lui)
+        self.afficher_detail_classement()
+
+    def ajuster_colonnes(self):
+        """Colonne « Pilote » du classement : la place qui reste (les colonnes des
+        courses avec IA apparaissent ou disparaissent selon la catégorie)."""
+        table = self.table_classement
+        largeur = table.winfo_width()
+        visibles = table["displaycolumns"]
+        if tuple(visibles) == ("#all",):
+            visibles = table["columns"]
+        if largeur > 1:
+            autres = sum(table.column(c, "width") for c in visibles if c != "pilote")
+            table.column("pilote", width=max(80, largeur - autres - 4))
+
+    def afficher_detail_classement(self):
+        """Sous le classement : le build du temps sélectionné (comme dans Mes temps)."""
+        if not hasattr(self, "texte_detail_classement"):
+            return
+        zone = self.texte_detail_classement
+        zone.configure(state="normal")
+        zone.delete("1.0", "end")
+        sel = self.table_classement.selection()
+        x = self.entrees_classement.get(sel[0]) if sel else None
+        d = C.detail_de_entree(x) if x else {}
+        self.bouton_reprendre_classement.configure(
+            state="normal" if d.get("niveaux") and self.catalogue else "disabled")
+        if not x:
+            zone.insert("end", t("cl_detail_vide"), "note")
+        else:
+            if d.get("niveaux"):
+                self.ecrire_build(zone, d, self.cache_classement[0]["vehicule"])
+            tours = [C.ms_vers_texte(v) for v in (x.get("tours_ms") or []) if isinstance(v, int)]
+            if tours:
+                self.a_la_ligne(zone)
+                zone.insert("end", t("cl_detail_tours"), "cle")
+                zone.insert("end", "  ·  ".join(tours))
+            self.a_la_ligne(zone)
+            zone.insert("end", t("cl_detail_infos", date=x.get("date_course") or str(x.get("date_envoi", ""))[:10],
+                                 version=x.get("version") or "?"), "note")
+        zone.configure(state="disabled")
+
+    def reprendre_build_classement(self):
+        """« Reprendre ce build » sous le classement : le build d'un autre pilote dans l'onglet Build."""
+        sel = self.table_classement.selection()
+        x = self.entrees_classement.get(sel[0]) if sel else None
+        if not x or not self.catalogue or not self.cache_classement:
+            return
+        d = C.detail_de_entree(x)
+        if d.get("niveaux"):
+            cle = self.cache_classement[0]["vehicule"]
+            self.reprendre_build(d, t("cl_build_repris", pseudo=x.get("pseudo", "")), cle,
+                                 self.nom_vehicule_en_ligne(cle))
 
     # ═════════════════════════════════════════════════════════════════════
     #  SESSION D'ENTRAÎNEMENT (LAUNCHER)
@@ -1080,9 +2260,12 @@ class Fenetre(tk.Tk):
     # ═════════════════════════════════════════════════════════════════════
     def message(self, texte):
         """Utilisable depuis une tâche de fond : met le message dans la file
-        et le garde dans sessions/journal-fenetre.txt."""
-        ligne = f"{datetime.now():%H:%M:%S}  {texte}"
-        self.file_messages.put(ligne)
+        et le garde dans sessions/journal-fenetre.txt. `texte` est un texte
+        ou, mieux, un message traduisible (L.m(...)) : il changera de langue
+        avec la fenêtre."""
+        heure = f"{datetime.now():%H:%M:%S}"
+        ligne = f"{heure}  {texte}"
+        self.file_messages.put((heure, texte))
         try:
             self.cfg.sessions.mkdir(parents=True, exist_ok=True)
             with open(self.cfg.sessions / "journal-fenetre.txt", "a", encoding="utf-8") as f:
@@ -1092,14 +2275,16 @@ class Fenetre(tk.Tk):
 
     def lire_messages(self):
         while not self.file_messages.empty():
-            self.liste_messages.insert("end", self.file_messages.get())
+            heure, texte = self.file_messages.get()
+            self.historique_messages.append((heure, texte))
+            self.liste_messages.insert("end", f"{heure}  {texte}")
             self.liste_messages.see("end")
         self.after(300, self.lire_messages)
 
     def executer(self, travail):
         """Lance une tâche de fond, une seule à la fois."""
         if self.travail_en_cours:
-            self.message(t("patiente"))
+            self.message(L.m("patiente"))
             return
         self.travail_en_cours = True
 
@@ -1107,9 +2292,10 @@ class Fenetre(tk.Tk):
             try:
                 travail()
             except S.ErreurSession as e:
-                self.message("✖ " + str(e))
+                texte = e.args[0] if e.args else ""
+                self.message(texte.avec_prefixe("✖ ") if isinstance(texte, L.Message) else "✖ " + str(e))
             except Exception as e:   # filet de sécurité : jamais de fenêtre figée
-                self.message(t("erreur_inattendue", e=repr(e)))
+                self.message(L.m("erreur_inattendue", e=repr(e)))
             finally:
                 self.travail_en_cours = False
         threading.Thread(target=enveloppe, daemon=True).start()
@@ -1128,18 +2314,18 @@ class Fenetre(tk.Tk):
             self.prefs["fenetre"]["dossier_jeu"] = str(Path(dossier))
             self.enregistrer_preferences()
             self.cfg = S.Config(racine_jeu=dossier)
-            self.message(t("dossier_jeu_ok", chemin=Path(dossier)))
+            self.message(L.m("dossier_jeu_ok", chemin=Path(dossier)))
         # 2. UE4SS a besoin de Visual C++ : s'il manque, on propose l'installateur du jeu
         manquant = S.visual_cpp_manquant()
         if manquant:
             installateur = S.installateur_visual_cpp(self.cfg)
             if not installateur:
-                self.message("✖ " + t("vcpp_absent", dll=", ".join(manquant)))
+                self.message(L.m("vcpp_absent", "✖ ", dll=", ".join(manquant)))
                 return
             if messagebox.askyesno(t("vcpp_titre"), t("vcpp_question", dll=", ".join(manquant),
                                                      chemin=installateur)):
                 os.startfile(installateur)   # l'installateur de Microsoft demande lui-même l'administrateur
-                self.message(t("vcpp_lance"))
+                self.message(L.m("vcpp_lance"))
             return
         self.executer(self.sequence_debut)
 
@@ -1147,37 +2333,37 @@ class Fenetre(tk.Tk):
         """▶ Démarrer : sauvegarde + UE4SS + pare-feu + lancement du jeu."""
         if S.pare_feu_windows_actif() is False:
             raise S.ErreurSession(t("pare_feu_desactive"))
-        self.message(t("debut_sauvegarde"))
+        self.message(L.m("debut_sauvegarde"))
         S.debut(self.cfg, self.message)
         try:
-            self.message(t("pare_feu_uac"))
+            self.message(L.m("pare_feu_uac"))
             if not S.lancer_script_pare_feu(self.cfg, "Session"):
-                self.message(t("pare_feu_refuse"))
+                self.message(L.m("pare_feu_refuse"))
                 S.fin(self.cfg, self.message)
                 return
             etat = S.attendre_etat_pare_feu(self.cfg, "actif", 120)
             if etat != "actif":
-                self.message(t("pare_feu_echec", etat=etat or t("pas_de_reponse")))
+                self.message(L.m("pare_feu_echec", etat=etat or t("pas_de_reponse")))
                 S.fin(self.cfg, self.message)
                 S.liberer_pare_feu(self.cfg, self.message)
                 return
         except Exception:
             # Quoi qu'il arrive, pas de jeu moddé sans pare-feu : on défait tout.
-            self.message(t("pare_feu_probleme"))
+            self.message(L.m("pare_feu_probleme"))
             S.fin(self.cfg, self.message)
             raise
-        self.message(t("pare_feu_actif"))
+        self.message(L.m("pare_feu_actif"))
         self.jeu_vu, self.absent_depuis = False, None
         S.lancer_jeu(self.cfg)
-        self.message(t("lancement_jeu"))
+        self.message(L.m("lancement_jeu"))
 
     def sequence_fin(self):
         """Fin : retrait d'UE4SS, sauvegarde remise, pare-feu levé."""
-        self.message(t("fin_remise"))
+        self.message(L.m("fin_remise"))
         S.fin(self.cfg, self.message)
         S.liberer_pare_feu(self.cfg, self.message)
         self.jeu_vu, self.absent_depuis = False, None
-        self.message(t("fin_ok"))
+        self.message(L.m("fin_ok"))
 
     def sequence_lever_pare_feu(self):
         S.liberer_pare_feu(self.cfg, self.message)
@@ -1191,15 +2377,15 @@ class Fenetre(tk.Tk):
             essai.write_text("ok", encoding="utf-8")
             essai.unlink()
         except OSError:
-            self.message("✖ " + t("dossier_non_inscriptible", chemin=DOSSIER_PROJET))
+            self.message(L.m("dossier_non_inscriptible", "✖ ", chemin=DOSSIER_PROJET))
         if S.jeu_trouve(self.cfg):
-            self.message(t("dossier_jeu_ok", chemin=self.cfg.racine_jeu))
+            self.message(L.m("dossier_jeu_ok", chemin=self.cfg.racine_jeu))
         else:
-            self.message("⚠ " + t("jeu_introuvable"))
+            self.message(L.m("jeu_introuvable", "⚠ "))
         if S.session_en_cours(self.cfg) and not S.jeu_lance(self.cfg):
-            self.message(t("session_oubliee"))
+            self.message(L.m("session_oubliee"))
         elif not S.session_en_cours(self.cfg) and S.regles_pare_feu_presentes(self.cfg):
-            self.message(t("blocage_oublie"))
+            self.message(L.m("blocage_oublie"))
 
     def surveiller_session(self):
         """Toutes les 2 s : état affiché, boutons, et fin automatique quand le jeu se ferme."""
@@ -1208,24 +2394,30 @@ class Fenetre(tk.Tk):
             lance = S.jeu_lance(self.cfg)
         except Exception:
             session, lance = None, False
+        # Steam repassé EN LIGNE pendant une session moddée : on prévient (une
+        # fois par passage en ligne). Le mod, lui, se bloque tout seul.
+        steam_en_ligne = bool(session) and not S.steam_hors_ligne(self.cfg)
+        if steam_en_ligne and not self.alerte_steam:
+            self.message(L.m("steam_en_ligne_session", "⚠ "))
+        self.alerte_steam = steam_en_ligne
         if session and lance:
             self.jeu_vu, self.absent_depuis = True, None
-            self.afficher_session("session_en_cours", "#c62828")
+            self.afficher_session("session_en_cours", T.ROUGE)
         elif session:
             if self.jeu_vu and not self.travail_en_cours:
                 # Le jeu vient de se fermer : on attend quelques secondes (il
                 # peut encore écrire sa sauvegarde) puis on remet tout d'origine.
                 if self.absent_depuis is None:
                     self.absent_depuis = time.time()
-                    self.message(t("jeu_ferme"))
+                    self.message(L.m("jeu_ferme"))
                 elif time.time() - self.absent_depuis > 8:
                     self.jeu_vu = False
                     self.executer(self.sequence_fin)
-            self.afficher_session("session_ouverte", "#ef6c00")
+            self.afficher_session("session_ouverte", T.ORANGE)
         elif lance:
-            self.afficher_session("session_origine_lance", "#555555")
+            self.afficher_session("session_origine_lance", T.TEXTE_DOUX)
         else:
-            self.afficher_session("session_vanilla", "#2e7d32")
+            self.afficher_session("session_vanilla", T.VERT)
         self.etat_boutons = (session, lance)
         self.activer_boutons()
         self.after(2000, self.surveiller_session)
@@ -1247,6 +2439,7 @@ class Fenetre(tk.Tk):
         if self.var_session.get() != t(cle):
             self.var_session.set(t(cle))
         self.etiquette_session.configure(foreground=couleur)
+        self.voyant.allumer(couleur)
 
     # ═════════════════════════════════════════════════════════════════════
     #  LANGUE
@@ -1282,14 +2475,13 @@ class Fenetre(tk.Tk):
         self.prefs["fenetre"]["langue"] = code
         self.enregistrer_preferences()
         self.ecrire_langue_pour_le_mod()
-        messages = self.liste_messages.get(0, "end")
         onglet = self.onglets.index("current")
         for enfant in self.winfo_children():
             enfant.destroy()
         self.title(f"{t('titre')}  —  v{VERSION}")
         self._construire()                     # …et revient dans la nouvelle langue
-        for m in messages:
-            self.liste_messages.insert("end", m)
+        for heure, texte in self.historique_messages:   # traduits de nouveau (L.Message)
+            self.liste_messages.insert("end", f"{heure}  {texte}")
         self.liste_messages.see("end")
         self.onglets.select(onglet)
         if self.etat_session:
@@ -1297,6 +2489,7 @@ class Fenetre(tk.Tk):
         self.activer_boutons()
         self.var_etat.set("")
         self._date_temps = None                # l'onglet Mes temps se remplira tout seul
+        self._date_traduction = self.date_traduction()   # (le catalogue rechargé ci-dessous l'inclut déjà)
         if self.catalogue:
             self.charger_catalogue()
 
@@ -1314,7 +2507,14 @@ class Fenetre(tk.Tk):
             tours = max(1, min(20, int(self.var_tours.get())))
         except (tk.TclError, ValueError):
             tours = circuit.get("tours") or 3
-        commande = {"type": self.var_type.get(), "piste": circuit["chemin"], "tours": tours, "pilote": pilote}
+        try:
+            adversaires = max(0, min(NB_ADVERSAIRES_MAX, int(self.var_adversaires.get())))
+        except (tk.TclError, ValueError):
+            adversaires = 0
+        commande = {"type": self.var_type.get(), "piste": circuit["chemin"], "tours": tours, "pilote": pilote,
+                    "adversaires": adversaires}
+        if adversaires > 0 and self.difficulte:   # (la difficulté ne sert qu'avec des adversaires)
+            commande.update({"difficulte": self.difficulte, "nom_difficulte": self.nom_difficulte(self.difficulte)})
         build, _capacites = self.commande_build()
         commande.update(build)
         # Noms lisibles, recopiés tels quels par le mod dans le fichier des temps
@@ -1354,7 +2554,28 @@ class Fenetre(tk.Tk):
         if date != self._date_temps:
             self._date_temps = date
             self.remplir_temps()
+        # Le mod vient d'écrire les noms du jeu dans la langue de la fenêtre ?
+        # On recharge le catalogue (en gardant circuit, pilote et build choisis).
+        date_trad = self.date_traduction()
+        if date_trad != self._date_traduction:
+            self._date_traduction = date_trad
+            if self.catalogue and any(d is not None for d in date_trad):
+                self.memoriser_selection()
+                self.enregistrer_preferences()
+                self.charger_catalogue()
         self.after(DELAI_ETAT, self.rafraichir_etat)
+
+    @staticmethod
+    def date_traduction():
+        """Dates des fichiers que le mod écrit après le catalogue (noms dans la
+        langue de la fenêtre, styles des pilotes) : s'ils changent, on recharge."""
+        dates = []
+        for fichier in (fichier_traduction(L.actuelle()), FICHIER_STYLES, FICHIER_DIFFICULTES):
+            try:
+                dates.append(fichier.stat().st_mtime)
+            except OSError:
+                dates.append(None)
+        return tuple(dates)
 
     def enregistrer_preferences(self):
         if self.catalogue:
@@ -1363,16 +2584,62 @@ class Fenetre(tk.Tk):
             self.pref_build["capacites"] = "|".join(capacites)   # garde la place de chaque emplacement
         self.choix["speciaux"] = str(self.var_speciaux.get())
         self.choix["au_premier_plan"] = str(self.var_dessus.get())
+        try:
+            self.choix["adversaires"] = str(max(0, min(NB_ADVERSAIRES_MAX, int(self.var_adversaires.get()))))
+        except (tk.TclError, ValueError):
+            pass
+        self.pref_build["build_pilote"] = str(self.var_build_pilote.get())
+        self.choix["difficulte"] = self.difficulte
+        self.pref_classement["pseudo"] = self.var_pseudo.get()
+        adresse = self.var_adresse.get().strip()   # (gardée seulement si on l'a changée)
+        self.pref_classement["adresse"] = adresse if adresse != C.URL_PAR_DEFAUT else ""
+        self.pref_classement["categorie"] = self.var_categorie.get()
         with open(FICHIER_PREFERENCES, "w", encoding="utf-8") as f:
             self.prefs.write(f)
 
+    def relancer_jeu(self):
+        """« Relancer le jeu » pendant une session : seulement avec Steam hors
+        ligne et le blocage pare-feu toujours en place."""
+        if not S.steam_hors_ligne(self.cfg):
+            self.message(L.m("steam_en_ligne", "✖ "))
+            return
+        if S.etat_pare_feu(self.cfg) != "actif":
+            self.message(L.m("relance_sans_pare_feu", "✖ "))
+            return
+        self.jeu_vu, self.absent_depuis = False, None
+        S.lancer_jeu(self.cfg)
+
     def fermer(self):
+        """Fermer la fenêtre pendant une session : sans elle, rien ne remet le
+        jeu d'origine quand on le quitte (incident du 11/10/2026 : jeu moddé
+        relancé plus tard, Steam en ligne). On demande donc ce qu'on fait."""
         self.enregistrer_preferences()
-        if S.session_en_cours(self.cfg):
-            # On ferme quand même : la session sera terminée à la prochaine
-            # ouverture (le pare-feu reste actif d'ici là, ce qui est sans danger).
-            self.message(t("fenetre_fermee"))
+        if S.session_en_cours(self.cfg) and not self.fermeture_demandee:
+            if S.jeu_lance(self.cfg):
+                if not messagebox.askokcancel(t("fermer_titre"), t("fermer_jeu_lance")):
+                    return
+            else:
+                choix = messagebox.askyesnocancel(t("fermer_titre"), t("fermer_terminer"))
+                if choix is None:              # Annuler : on reste
+                    return
+                if choix:                      # Oui : remise d'origine, puis fermeture
+                    self.fermeture_demandee = True
+                    self.executer(self.sequence_fin)
+                    self.after(500, self.fermer_apres_fin)
+                    return
+            # (le pare-feu reste actif d'ici la prochaine ouverture : sans danger)
+            self.message(L.m("fenetre_fermee"))
         self.destroy()
+
+    def fermer_apres_fin(self):
+        """Ferme la fenêtre une fois la fin de session faite. Si elle a échoué,
+        la fenêtre reste ouverte : l'erreur est dans la liste des messages."""
+        if self.travail_en_cours:
+            self.after(500, self.fermer_apres_fin)
+        elif S.session_en_cours(self.cfg):
+            self.fermeture_demandee = False
+        else:
+            self.destroy()
 
 
 def auto_test(fichier_resultat):

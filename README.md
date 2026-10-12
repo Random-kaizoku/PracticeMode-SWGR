@@ -1,6 +1,6 @@
 # PracticeMode for STAR WARS: Galactic Racer
 
-Offline practice mode: any track, vehicle, racer and part-by-part build, unlimited crashes, instant restart, save states (position, speed, boost), section timer and lap time log. Window in English and French.
+Offline practice mode: any track, vehicle, racer and part-by-part build, AI opponents with difficulty, racer styles, unlimited crashes, instant restart, save states (position, speed, boost), section timer and lap time log. Window in English and French.
 
 Published on Nexus Mods by **RNGKZK**. This repository holds the complete source code of the release archive and the steps to build it.
 

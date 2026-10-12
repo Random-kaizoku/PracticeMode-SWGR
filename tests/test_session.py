@@ -52,6 +52,8 @@ test("session enregistrée", S.session_en_cours(cfg) == session)
 installe = (w64 / "ue4ss/Mods/PracticeMode/Scripts/main.lua").read_text(encoding="utf-8")
 test("dossier de PracticeMode écrit dans le mod installé",
      f'local DOSSIER_PRACTICEMODE = "{projet.as_posix()}/"' in installe)
+test("fichier de Steam (verrou « Steam hors ligne ») écrit dans le mod installé",
+     f'local FICHIER_STEAM = "{(steam / "config/loginusers.vdf").as_posix()}"' in installe)
 test("le main.lua du dossier « installation » n'est pas modifié",
      'local DOSSIER_PRACTICEMODE = "ECRIT-PAR-LE-LAUNCHER/"'
      in (projet / "installation/ue4ss/Mods/PracticeMode/Scripts/main.lua").read_text(encoding="utf-8"))

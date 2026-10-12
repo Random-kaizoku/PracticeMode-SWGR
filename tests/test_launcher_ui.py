@@ -96,8 +96,50 @@ attendre(3)
 ok("entraînement annulé et jeu remis d'origine", not S.ue4ss_installe(cfg) and S.session_en_cours(cfg) is None)
 ok("le jeu n'a pas été lancé", not etat["jeu"])
 
+VDF = steam / "config/loginusers.vdf"
+HORS_LIGNE = VDF.read_text()
+print("4. Steam repasse EN LIGNE pendant une session (incident du 11/10)")
+etat["accepter_uac"] = True
+f.bouton_demarrer.invoke()
+attendre(15, lambda: "EN COURS" in f.var_session.get())
+VDF.write_text(HORS_LIGNE.replace('"WantsOfflineMode"\t"1"', '"WantsOfflineMode"\t"0"'))
+attendre(6, lambda: "EN LIGNE alors" in " ".join(f.liste_messages.get(0, "end")))
+ok("alerte « Steam EN LIGNE pendant une session »", "EN LIGNE alors" in " ".join(f.liste_messages.get(0, "end")))
+etat["jeu"] = False                          # on quitte le jeu…
+f.relancer_jeu()                             # …et on veut le relancer, Steam toujours en ligne
+attendre(1)
+ok("« Relancer le jeu » refusé tant que Steam est en ligne", not etat["jeu"]
+   and "Steam est en ligne" in " ".join(f.liste_messages.get(0, "end")))
+VDF.write_text(HORS_LIGNE)
+attendre(25, lambda: "vanilla" in f.var_session.get() and not f.travail_en_cours)
+ok("remise d'origine automatique quand même", not S.ue4ss_installe(cfg) and S.session_en_cours(cfg) is None)
+
 print("\nMessages affichés dans la fenêtre :")
 for m in f.liste_messages.get(0, "end"):
     print("   ", m)
-f.destroy()
+
+print("5. Fermer la fenêtre pendant une session")
+f.bouton_demarrer.invoke()
+attendre(15, lambda: "EN COURS" in f.var_session.get())
+reponses = {"okcancel": False, "yesnocancel": True}
+pm.messagebox.askokcancel = lambda *a: reponses["okcancel"]
+pm.messagebox.askyesnocancel = lambda *a: reponses["yesnocancel"]
+f.fermer()                                   # le jeu tourne : « Fermer quand même ? » → Annuler
+attendre(1)
+ok("jeu lancé + Annuler : la fenêtre reste ouverte", f.winfo_exists())
+etat["jeu"] = False
+attendre(0.5)
+detruite = []                                # on note la fermeture de la fenêtre au moment où elle a lieu
+_destroy = f.destroy
+f.destroy = lambda: (detruite.append(S.session_en_cours(cfg) is None), _destroy())
+f.fermer()                                   # jeu fermé : « Remettre d'origine puis fermer ? » → Oui
+fin = time.time() + 25
+while time.time() < fin and not detruite:
+    f.update(); time.sleep(0.05)
+fermee = detruite == [True]                  # fermée, et seulement APRÈS la fin de session
+print(("  [OK]    " if fermee and not S.ue4ss_installe(cfg) and S.session_en_cours(cfg) is None else "  [ÉCHEC] ")
+      + "jeu fermé + Oui : jeu remis d'origine, PUIS fenêtre fermée")
+if not (fermee and not S.ue4ss_installe(cfg) and S.session_en_cours(cfg) is None):
+    print("   fermetures :", detruite, "| UE4SS :", S.ue4ss_installe(cfg), "| session :", S.session_en_cours(cfg))
+    sys.exit(1)
 print("\nTOUS LES TESTS SONT PASSÉS")

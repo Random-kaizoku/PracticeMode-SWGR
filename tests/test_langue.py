@@ -18,26 +18,32 @@ import json
 catalogue = json.load(open(str(RACINE) + r"\echange\catalogue.json", encoding="utf-8"))
 catalogue["capacites"] = [   # deux capacités de test (le vrai catalogue peut ne pas en avoir)
     {"chemin": "/Game/Test/BP_Ability_Shield.BP_Ability_Shield_C", "nom": "BP_Ability_Shield_C",
-     "affiche": "Bouclier", "description": "Protège.", "niveau": 1, "crash": False,
-     "affiche_src": "Shield", "description_src": "Protects."},
+     "affiche": "Bouclier", "description": "Protège.", "niveau": 1, "crash": False},
     {"chemin": "/Game/Test/BP_Ability_IonBlast.BP_Ability_IonBlast_C", "nom": "BP_Ability_IonBlast_C",
-     "affiche": "Onde ionique", "description": "Boum.", "niveau": 1, "crash": True,
-     "affiche_src": "Ion Blast", "description_src": "Boom."},
+     "affiche": "Onde ionique", "description": "Boum.", "niveau": 1, "crash": True},
 ]
-# Jeu en français, textes d'origine en anglais (comme le vrai jeu) : le mod
-# exporte les deux versions. Ici, les versions « d'origine » sont marquées EN:
+# Jeu en français (comme le vrai jeu). Le mod, pour la fenêtre en anglais, écrit
+# catalogue-en.json : les noms du jeu en anglais, par chemin d'objet. Ici, les
+# noms anglais simulés sont marqués EN:
 interface = catalogue.setdefault("interface", {})
 interface.update({"langue_jeu": "fr-FR", "langue_source": "en"})
-interface["stats_src"] = {k: "EN:" + v for k, v in (interface.get("stats") or {"0": "Virage"}).items()}
-interface.setdefault("stats", {k: v[3:] for k, v in interface["stats_src"].items()})
-for section in ("circuits", "planetes", "vehicules", "affixes"):
-    for element in catalogue[section]:
-        element["affiche_src"] = "EN:" + (element.get("affiche") or element["nom"])
+interface.setdefault("stats", {"0": "Virage"})
 for p in catalogue["pilotes"]:
     if p["nom"] == "DA_Racer_TestPilot":
-        p["affiche"], p["affiche_src"] = "Pilote automatique", "Autopilot"
+        p["affiche"] = "Pilote automatique"
+objets_en = {}
+for section in ("circuits", "planetes", "vehicules", "affixes"):
+    for element in catalogue[section]:
+        objets_en[element["chemin"]] = {"affiche": "EN:" + (element.get("affiche") or element["nom"])}
+objets_en.update({p["chemin"]: {"affiche": "Autopilot"} for p in catalogue["pilotes"] if p["nom"] == "DA_Racer_TestPilot"})
+objets_en["/Game/Test/BP_Ability_Shield.BP_Ability_Shield_C"] = {"affiche": "Shield", "description": "Protects."}
+objets_en["/Game/Test/BP_Ability_IonBlast.BP_Ability_IonBlast_C"] = {"affiche": "Ion Blast", "description": "Boom."}
+traduction_en = {"langue": "en", "objets": objets_en,
+                 "interface": {"stats": {k: "EN:" + v for k, v in interface["stats"].items()}}}
 moto = next(v for v in catalogue["vehicules"] if v["nom"] == "VA_Bike")
+moto_en = objets_en[moto["chemin"]]["affiche"]
 pm.FICHIER_CATALOGUE.write_text(json.dumps(catalogue), encoding="utf-8")
+(tmp / "catalogue-en.json").write_text(json.dumps(traduction_en), encoding="utf-8")
 pm.L.langue_par_defaut = lambda: "fr"            # comme un Windows en français
 pm.S.session_en_cours = lambda c: None           # pas de vraie session pendant le test
 pm.S.jeu_lance = lambda c: False
@@ -90,12 +96,16 @@ circuit = f.circuits_affiches[0]["chemin"]
 f.var_niveaux[0].set(7)
 capacite = f.catalogue.capacites[0]
 f.var_capacites[2].set(capacite["texte"])
-f.liste_messages.insert("end", "message d'avant")
+f.message("message d'avant")                       # texte simple : gardé tel quel
+f.message(pm.L.m("pare_feu_actif"))                 # message traduisible : changera de langue
+f.lire_messages()
 f.onglets.select(1)
 f.var_langue.set("en"); f.changer_langue(); f.update()
 ok("bouton « Start practice »", f.bouton_demarrer.cget("text") == "▶ Start practice")
 ok("onglet Build toujours affiché", f.onglets.index("current") == 1)
-ok("onglets traduits", f.onglets.tab(2, "text") == "  My times  ")
+ok("onglets traduits", f.onglets.tab(2, "text") == "MY TIMES")
+ok("classement en ligne caché (version 2.0.0) : 3 onglets, pas de colonne « En ligne »",
+   len(f.onglets.tabs()) == 3 and "en_ligne" not in f.table_temps.cget("displaycolumns"))   # titres en capitales (interface holotable)
 ok("groupes traduits", f.arbre_pilotes.item("grp:module", "text") == "Podracer pilots")
 ok("pilote gardé, variante traduite",
    f.pilote == age and f.arbre_pilotes.item(age, "text") == "Sebulba  (older version)")
@@ -106,7 +116,10 @@ ok("circuit gardé, sur la même planète (dont le nom a changé de langue)",
 ok("niveau de stat gardé", f.var_niveaux[0].get() == 7)
 ok("capacité gardée dans l'emplacement 3", f.chemin_par_texte.get(f.var_capacites[2].get()) == capacite["chemin"])
 ok("capacités vides en anglais : « (none) »", f.var_capacites[0].get() == "(none)")
-ok("messages gardés", "message d'avant" in f.liste_messages.get(0, "end"))
+lignes = " ".join(f.liste_messages.get(0, "end"))
+ok("messages gardés", "message d'avant" in lignes)
+ok("message déjà affiché, retraduit en anglais", "firewall active: the game can no longer send anything" in lignes
+   and "pare-feu actif" not in lignes)
 ok("langue.txt = en pour le mod", (tmp / "langue.txt").read_text(encoding="utf-8") == "en")
 prefs = configparser.ConfigParser(interpolation=None); prefs.read(tmp / "prefs.ini", encoding="utf-8")
 ok("langue gardée dans les préférences", prefs["fenetre"]["langue"] == "en")
@@ -142,11 +155,11 @@ ok("noms venus du jeu de nouveau en français",
 print("6. Records : un même circuit noté en français puis en anglais compte ensemble")
 c0 = next(c for c in catalogue["circuits"] if c.get("interne"))
 fr_nom = f"{c0['affiche']} [{c0['interne']}]"
-en_nom = f"{c0['affiche_src']} [{c0['interne']}]"
+en_nom = f"{objets_en[c0['chemin']]['affiche']} [{c0['interne']}]"
 en_tete = "Date;Planète;Circuit;Nb tours;Véhicule;Pilote;Temps;Secondes;Meilleur tour;Détail des tours;Build;Save state\n"
 (tmp / "temps" / "temps.csv").write_text(
     en_tete + f'"1";"P";"{fr_nom}";"3";"{moto["affiche"]}";"S";"1:10.000";"70.000";"";"";"";"non"\n'
-    + f'"2";"P";"{en_nom}";"3";"{moto["affiche_src"]}";"S";"1:05.000";"65.000";"";"";"";"non"\n', encoding="utf-8")
+    + f'"2";"P";"{en_nom}";"3";"{moto_en}";"S";"1:05.000";"65.000";"";"";"";"non"\n', encoding="utf-8")
 f._date_temps = None; f.rafraichir_etat(); f.update()
 etoiles = [f.table_temps.item(i, "values")[6] for i in f.table_temps.get_children()]
 print("      ", etoiles)

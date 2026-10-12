@@ -1,9 +1,9 @@
--- GUObjectArray.lua : correctif UE4SS pour Star Wars: Galactic Racer (jeu 1.1.4.1, UE 5.7.4)
+-- GUObjectArray.lua : correctif UE4SS pour Star Wars: Galactic Racer (build Steam 25880680 du 12/10/2026, UE 5.7.4-382801)
 -- La liste de tous les objets du jeu (variable globale GUObjectArray).
 -- Motif : « lea rcx,[GUObjectArray] » juste avant l'appel qui réserve la
 -- liste au démarrage (fonction qui lit gc.MaxObjectsInGame).
--- Généré par outils/gen_signatures.py le 10/10/2026. Vérifié : motif unique,
--- résultat = 0x14AC5E910 (adresse confirmée dans la mémoire du jeu).
+-- Généré par outils/gen_signatures.py le 12/10/2026. Vérifié : motif unique,
+-- résultat = 0x14AC5F910 (adresse confirmée dans la mémoire du jeu).
 
 -- Register() donne à UE4SS le motif d'octets à chercher (?? = n'importe quel octet).
 function Register()

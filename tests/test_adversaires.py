@@ -894,6 +894,43 @@ boucle()
 ok("pilote sans pod propre : contre-la-montre de l'épreuve, comme avant",
    len(list(L.appels_rapides.values())) == n_rapides + 1)
 
+print("13. Condition de piste de l'épreuve modèle accordée au circuit (captures d'un joueur Nexus)")
+# L'épreuve de modules impose « Sunset » (Beagle) : sur un circuit qui ne la
+# connaît pas, image abîmée. Le mod prend une condition du circuit.
+lua.execute("""
+modele.TrackConditionTag = {TagName = fname("TrackCondition.Sunset")}
+function conditions(liste)
+    local t = {}
+    for _, nom in ipairs(liste) do table.insert(t, {Tag = {TagName = fname(nom)}, DataLayers = tableau({})}) end
+    return tableau(t)
+end
+piste.TrackConditionDataLayers = conditions({"TrackCondition.Night", "TrackCondition.Afternoon.Dry"})
+""")
+L.carte_actuelle = "L_FrontEnd"
+lua.execute("ctrl.PlayerState = nil; ctrl.Pawn = nil")
+boucle()
+
+
+def condition():
+    return lua.eval("modele.TrackConditionTag.TagName:ToString()")
+
+
+commande(type="motojet", piste="/Game/T/TRAK_DAL_LOOP_A.TRAK_DAL_LOOP_A", tours=2)
+boucle()
+ok("circuit sans « Sunset » : sa première condition", condition() == "TrackCondition.Night")
+ok("journal : condition choisie et celle de l'épreuve",
+   "condition de piste : TrackCondition.Night (épreuve : TrackCondition.Sunset)"
+   in " ".join(str(x) for x in L.journal.values()))
+lua.execute('piste.TrackConditionDataLayers = conditions({"TrackCondition.Afternoon.Dry", "TrackCondition.Sunset"})')
+commande(type="motojet", piste="/Game/T/TRAK_DAL_LOOP_A.TRAK_DAL_LOOP_A", tours=2)
+boucle()
+ok("circuit qui connaît la condition d'origine : elle revient (pas celle d'avant)",
+   condition() == "TrackCondition.Sunset")
+lua.execute('modele.TrackConditionTag = {TagName = fname("TrackCondition.Sunset")}; piste.TrackConditionDataLayers = conditions({})')
+commande(type="motojet", piste="/Game/T/TRAK_DAL_LOOP_A.TRAK_DAL_LOOP_A", tours=2)
+boucle()
+ok("circuit sans condition : celle de l'épreuve gardée", condition() == "TrackCondition.Sunset")
+
 ok("aucun LoopAsync ni ExecuteWithDelay (fil « async » d'UE4SS, v0.9.9)", L.anciens_appels == 0)
 erreurs = [str(x) for x in L.journal.values() if "ERREUR" in str(x) or "ERROR" in str(x)]
 ok("aucune erreur dans le journal", not erreurs)

@@ -201,14 +201,16 @@ def arreter_crashpad(cfg, journal):
 # ─────────────────────────────────────────────────────────────────────────
 def steam_hors_ligne(cfg):
     """Steam l'écrit dans config/loginusers.vdf : on regarde le compte connecté
-    le plus récemment (plus grand « Timestamp ») et sa valeur WantsOfflineMode."""
+    le plus récemment (plus grand « Timestamp ») et sa valeur WantsOfflineMode.
+    Depuis une mise à jour de Steam (vu le 14/10/2026), la clé s'écrit
+    « timestamp » : on lit les deux."""
     try:
         texte = (cfg.steam / "config" / "loginusers.vdf").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
     meilleur, temps_max = None, -1
     for bloc in re.findall(r"\{[^{}]*\}", texte):
-        m = re.search(r'"Timestamp"\s+"(\d+)"', bloc)
+        m = re.search(r'"[Tt]imestamp"\s+"(\d+)"', bloc)
         if m and int(m.group(1)) > temps_max:
             temps_max, meilleur = int(m.group(1)), bloc
     return bool(meilleur and re.search(r'"WantsOfflineMode"\s+"1"', meilleur))

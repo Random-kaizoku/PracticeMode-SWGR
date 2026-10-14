@@ -18,6 +18,11 @@ An offline practice mode to train on any track:
     used, and some pod pilots' abilities are incomplete. Fixes coming in 2.1.
 
 
+WHAT'S NEW IN 2.0.1
+-------------------
+  - Works again with the current Steam client: Steam changed how it stores the
+    offline mode, and 2.0.0 refused to start ("Steam is not offline").
+
 WHAT'S NEW IN 2.0.0
 -------------------
   - Works with the game update of 12 October 2026 (Steam build 25880680).

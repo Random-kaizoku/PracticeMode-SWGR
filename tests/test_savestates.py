@@ -492,6 +492,17 @@ VDF.write_text(STEAM_HORS_LIGNE, encoding="utf-8")
 lua.execute("os.clock = (function(h) return function() return h() + 1000 end end)(os.clock)")
 touche("F7")
 ok("Steam de nouveau hors ligne : la sauvegarde marche", "emplacement 1 sauvegardé" in etat_txt())
+# Format de Steam depuis le 14/10/2026 : « timestamp » en minuscules
+VDF.write_text(STEAM_HORS_LIGNE.replace('"Timestamp"', '"timestamp"'), encoding="utf-8")
+lua.execute("os.clock = (function(h) return function() return h() + 1000 end end)(os.clock)")
+touche("F7")
+ok("Steam hors ligne, clé « timestamp » en minuscules (Steam du 14/10) : reconnu", "emplacement 1 sauvegardé" in etat_txt())
+VDF.write_text(STEAM_EN_LIGNE.replace('"Timestamp"', '"timestamp"'), encoding="utf-8")
+lua.execute("os.clock = (function(h) return function() return h() + 1000 end end)(os.clock)")
+touche("F7")
+ok("Steam en ligne, clé « timestamp » : bloqué", "Steam est EN LIGNE" in etat_txt())
+VDF.write_text(STEAM_HORS_LIGNE, encoding="utf-8")
+lua.execute("os.clock = (function(h) return function() return h() + 1000 end end)(os.clock)")
 
 print("16. Exploration (lecture seule) des modes et épreuves : préparation des adversaires IA")
 lua.execute("""

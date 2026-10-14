@@ -43,7 +43,7 @@ from langues import t
 # ─────────────────────────────────────────────────────────────────────────
 #  RÉGLAGES
 # ─────────────────────────────────────────────────────────────────────────
-VERSION = "2.0.0"   # même numéro que le mod (main.lua) ; vérifié par outils/empaqueter.py
+VERSION = "2.0.1"   # même numéro que le mod (main.lua) ; vérifié par outils/empaqueter.py
 
 DOSSIER_PROJET = S.dossier_application()   # dossier de PracticeMode.exe, ou du dépôt
 DOSSIER_ECHANGE = DOSSIER_PROJET / "echange"

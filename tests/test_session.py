@@ -36,6 +36,14 @@ def test(nom, cond):
 
 print("1. Vérifications Steam (faux Steam)")
 test("Steam hors ligne détecté", S.steam_hors_ligne(cfg))
+# Format de Steam depuis le 14/10/2026 : « timestamp » en minuscules
+_vdf = steam / "config/loginusers.vdf"
+_avant = _vdf.read_text()
+_vdf.write_text(_avant.replace('"Timestamp"', '"timestamp"'))
+test("Steam hors ligne détecté, clé « timestamp » en minuscules (Steam du 14/10)", S.steam_hors_ligne(cfg))
+_vdf.write_text(_avant.replace('"Timestamp"', '"timestamp"').replace('"WantsOfflineMode"		"1"', '"WantsOfflineMode"		"0"', 1))
+test("Steam en ligne, clé « timestamp » : pas hors ligne", not S.steam_hors_ligne(cfg))
+_vdf.write_text(_avant)
 test("Steam Cloud désactivé détecté", S.cloud_desactive(cfg))
 print("2. Version du jeu inconnue (faux exe) → refus")
 try:

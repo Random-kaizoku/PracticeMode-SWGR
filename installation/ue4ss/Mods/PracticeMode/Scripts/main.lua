@@ -1,6 +1,11 @@
 --[[
     PracticeMode : mode entraînement pour Star Wars: Galactic Racer
     =================================================================
+    Version 2.0.1 (14/10/2026) : Steam écrit maintenant « timestamp » (en
+    minuscules) dans loginusers.vdf : le mode hors ligne n'était plus
+    reconnu (refus de démarrer). Condition de piste de l'épreuve modèle
+    accordée au circuit choisi.
+
     Version 2.0.0 (12/10/2026) : version publique (Nexus, après la 0.9.4,
     appelée v1.0 sur Nexus) = la 0.9.9 ci-dessous, plus : adversaires des
     courses de modules (pilotes de module), véhicule du pilote en
@@ -291,6 +296,13 @@ local CONFIG = {
     ProprieteDerniere   = "LastPlayedArcadeEvent",
     ProprietePiste      = "TrackDef",
     ProprieteTours      = "LapCount",
+    -- Condition de piste (heure, météo) de l'épreuve modèle (v2.0.1). Celle de
+    -- l'épreuve de modules est « TrackCondition.Sunset » (Beagle) : sur un
+    -- circuit qui ne la connaît pas (presque tous), image abîmée (captures d'un
+    -- joueur Nexus : déchirures en bas, bannières dédoublées). On prend celle
+    -- de l'épreuve si le circuit la connaît, sinon la première du circuit.
+    Condition_Epreuve   = "TrackConditionTag",          -- RaceEventDef → FGameplayTag
+    Condition_Circuit   = "TrackConditionDataLayers",   -- TrackDef → [{ Tag, DataLayers }]
     ClassesCatalogue    = { Circuits = "TrackDef", Planetes = "PlanetDef",
                             Vehicules = "VehicleArchetype", Pilotes = "RacerDef" },
 
@@ -958,7 +970,8 @@ local verrou = { protege = false, raison = "verrou", luA = nil, messageA = nil }
 -- Steam hors ligne ? Steam l'écrit dans loginusers.vdf : on prend le compte
 -- connecté le plus récemment (plus grand « Timestamp ») et sa valeur
 -- « WantsOfflineMode » (même règle que la fenêtre, session.py). Fichier
--- illisible = on ne sait pas = pas hors ligne.
+-- illisible = on ne sait pas = pas hors ligne. Depuis une mise à jour de
+-- Steam (vu le 14/10/2026), la clé s'écrit « timestamp » : les deux sont lues.
 local function SteamHorsLigne()
     local f = io.open(FICHIER_STEAM, "r")
     if not f then
@@ -968,7 +981,7 @@ local function SteamHorsLigne()
     f:close()
     local plusRecent, horsLigne = -1, false
     for bloc in contenu:gmatch("{([^{}]*)}") do
-        local temps = tonumber(bloc:match('"Timestamp"%s+"(%d+)"'))
+        local temps = tonumber(bloc:match('"[Tt]imestamp"%s+"(%d+)"'))
         if temps and temps > plusRecent then
             plusRecent = temps
             horsLigne = bloc:match('"WantsOfflineMode"%s+"1"') ~= nil
@@ -1711,6 +1724,42 @@ local function RestaurerVehiculeImpose()
     end
 end
 
+-- Condition de piste de l'épreuve modèle accordée au circuit choisi (v2.0.1).
+-- La condition d'origine de chaque épreuve est gardée (par adresse) : c'est
+-- elle qu'on cherche d'abord dans les conditions du circuit.
+local conditionsOrigine = {}   -- adresse de l'épreuve → nom de sa condition d'origine
+local function AccorderCondition(modele, piste)
+    local ok, err = pcall(function()
+        local tag = modele[CONFIG.Condition_Epreuve]
+        local adresse = modele:GetAddress()
+        if not conditionsOrigine[adresse] then
+            conditionsOrigine[adresse] = tag.TagName:ToString()
+        end
+        local voulue = conditionsOrigine[adresse]
+        local premiere, choisie = nil, nil
+        piste[CONFIG.Condition_Circuit]:ForEach(function(_, e)
+            local nom = e:get().Tag.TagName
+            if premiere == nil then premiere = nom end
+            if nom:ToString() == voulue then choisie = nom end
+        end)
+        choisie = choisie or premiere
+        if choisie == nil then
+            return   -- (circuit sans condition : celle de l'épreuve est gardée)
+        end
+        if tag.TagName:ToString() ~= choisie:ToString() then
+            tag.TagName = choisie
+            if modele[CONFIG.Condition_Epreuve].TagName:ToString() ~= choisie:ToString() then
+                modele[CONFIG.Condition_Epreuve] = { TagName = choisie }   -- (autre écriture, au cas où)
+            end
+        end
+        Detail(string.format("condition de piste : %s (épreuve : %s)",
+                             modele[CONFIG.Condition_Epreuve].TagName:ToString(), voulue))
+    end)
+    if not ok then
+        Detail("condition de piste : non accordée (" .. tostring(err) .. ")")
+    end
+end
+
 local function RestaurerTours()
     for _, e in pairs(toursModifies) do
         if EstValide(e.objet) then
@@ -1760,8 +1809,10 @@ local function Lancer(choix)
         return
     end
 
-    -- 1. Circuit et tours de l'épreuve modèle (en mémoire seulement)
+    -- 1. Circuit et tours de l'épreuve modèle (en mémoire seulement), et une
+    --    condition de piste (heure, météo) que ce circuit connaît
     modele[CONFIG.ProprietePiste] = piste
+    AccorderCondition(modele, piste)
     local tours = tonumber(choix.tours)
     if tours and tours >= 1 and tours <= 99 then
         modele[CONFIG.ProprieteTours] = math.floor(tours)
@@ -4582,4 +4633,4 @@ Boucler(CONFIG.Touches_Delai, TraiterTouches)
 Boucler(CONFIG.Manette_Delai, function() Proteger("manette", LireManette) end)
 
 LireLangue()
-Journal(Traduire("charge", "2.0.0"))
+Journal(Traduire("charge", "2.0.1"))

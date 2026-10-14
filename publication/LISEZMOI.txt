@@ -20,6 +20,11 @@ Un mode entraînement, hors ligne, pour s'entraîner sur n'importe quel circuit 
     sont incomplètes. Corrections prévues en 2.1.
 
 
+NOUVEAUTÉS DE LA 2.0.1
+----------------------
+  - Remarche avec le Steam actuel : Steam a changé la façon dont il note le
+    mode hors ligne, et la 2.0.0 refusait de démarrer (« Steam n'est pas hors ligne »).
+
 NOUVEAUTÉS DE LA 2.0.0
 ----------------------
   - Compatible avec la mise à jour du jeu du 12 octobre 2026 (build Steam 25880680).
